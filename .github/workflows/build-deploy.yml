@@ -1,0 +1,880 @@
+name: Build and Deploy
+on:
+  workflow_call:
+    inputs:
+      ref:
+        required: true
+        type: string
+      branch:
+        required: true
+        type: string
+# This workflow declares NO `secrets:` input -- nothing has to be passed in by
+# a caller, and no personal access token is stored anywhere for it. It does
+# authenticate to GHCR, using the run's own automatic GITHUB_TOKEN, purely for
+# pull rate-limit headroom; the images are public, so that login is optional and
+# never fatal.
+#
+# That is why a fork pull request can render: GitHub withholds repository
+# secrets from forks, and this workflow wants none, while still issuing forks a
+# read-only GITHUB_TOKEN of their own. Callers still say `secrets: inherit`,
+# which is now a no-op and harmless.
+
+# One deployment per target branch at a time, newest wins. Without this, a
+# slow build of an older commit can finish after a faster build of a newer one
+# and force-push the branch BACKWARD -- silently serving stale content. Every
+# pull request also shares the single `preview` branch, so previews race each
+# other too. Keyed on the branch so preview and staging never block one another.
+# ACTIONS ARE PINNED BY MAJOR TAG, NOT BY SHA. THAT IS THE POLICY, NOT AN OVERSIGHT.
+# actions/checkout@v4, not actions/checkout@<40 hex>. A tag moves, and moving is the point:
+# patch and security fixes arrive without a commit here. Reviewers file tag pinning as a
+# supply-chain defect and propose SHA pinning; that was box F12 of issue 455, and
+# translation-sync.yml was converted back from SHAs to tags on 2026-09-17. Do not re-pin.
+#
+concurrency:
+  group: deploy-${{ inputs.branch }}
+  cancel-in-progress: true
+
+jobs:
+  # A GitHub Actions matrix must be static YAML, or come from a prior job's
+  # output. So this job's only purpose is reading the language list out of
+  # languages.yml and handing it to `render` as JSON. languages.yml is the
+  # one file that declares which languages ship. The list is NEVER
+  # hard-coded in this file.
+  languages:
+    runs-on: ubuntu-latest
+    # Read-only. This job only parses languages.yml; nothing here needs to write.
+    permissions:
+      contents: read
+    outputs:
+      mainlanguage: ${{ steps.read.outputs.mainlanguage }}
+      all: ${{ steps.read.outputs.all }}
+      sha: ${{ steps.resolve.outputs.sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      # inputs.ref MAY name a branch, and a branch moves while the render runs.
+      # Every later checkout uses this SHA instead, so every render leg and the
+      # deploy build ONE commit. The deploy commit message names it.
+      - name: Resolve the ref to one commit
+        id: resolve
+        env:
+          REF: ${{ inputs.ref }}
+        run: |
+          sha="$(git rev-parse HEAD)"
+          if ! printf '%s' "$sha" | grep -Eqx '[0-9a-f]{40}'; then
+            echo "::error::git rev-parse HEAD gave '$sha', which is not a commit SHA" >&2
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "inputs.ref '$REF' is commit $sha"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Install PyYAML
+        run: pip install --quiet pyyaml
+
+      - name: Read the language list from languages.yml
+        id: read
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+          import re
+          import sys
+          import yaml
+
+          PATH = "languages.yml"
+          if not os.path.isfile(PATH):
+              sys.exit(f"::error::{PATH} is missing; it declares every language that ships")
+          # BaseLoader keeps every scalar a string. yaml.safe_load reads an
+          # unquoted `no` as False, so the Norwegian code `no` would fail the
+          # shape check below. The step cannot import checks/langs.py, so it
+          # names the loader here.
+          with open(PATH) as fh:
+              cfg = yaml.load(fh, Loader=yaml.BaseLoader) or {}
+          main = cfg.get("main")
+          entries = cfg.get("languages") or []
+          if not main:
+              sys.exit(f"::error::{PATH} is missing `main`")
+          if not entries:
+              sys.exit(f"::error::{PATH} declares no `languages`")
+          # These are the codes in the file's own order. The main language
+          # is one of them, so it is never prepended.
+          all_langs = [e.get("code") if isinstance(e, dict) else e for e in entries]
+          # languages.yml is PR-controlled, and these values reach a shell and
+          # select which Docker image gets executed on the runner. Constrain
+          # them to a shape that cannot carry shell metacharacters.
+          bad = [x for x in all_langs + [main] if not re.fullmatch(r"[a-z]{2,3}", str(x))]
+          if bad:
+              sys.exit(f"::error::{PATH} declares invalid language code(s) {bad!r}; expected 2-3 lowercase letters")
+          if len(set(all_langs)) != len(all_langs):
+              sys.exit(f"::error::{PATH} declares a duplicate language code")
+          # Every language nests under its own <code>/, the main one
+          # included, and the site root redirects to the main language. A
+          # `main` outside the list would redirect to a directory that no
+          # render leg produces.
+          if main not in all_langs:
+              sys.exit(f"::error::{PATH} declares main={main!r}, which is not one of the codes {all_langs!r}")
+          print(f"mainlanguage={main}")
+          print(f"all={json.dumps(all_langs)}")
+          PY
+
+  # One matrix leg per language -- languages use separate workspaces (this
+  # repo checkout is per-job), so they render in parallel with nothing to
+  # race on (build_all_chapters.sh's own comment: "Different LANGUAGES use
+  # separate workspaces ... and MAY be processed in parallel with each
+  # other"). Within a language, build_all_chapters.sh itself renders
+  # sequentially and does the two-pass cross-reference fix internally (see
+  # its `for lang in "${RENDER_LANGS[@]}"` loop calling render_pass ... 1
+  # then ... 2). This workflow does not reimplement that, only calls the
+  # script.
+  render:
+    needs: languages
+    strategy:
+      # fail-fast: false so one broken language does not hide failures in the
+      # others -- still fails the job (and this workflow) as a whole. No step
+      # anywhere in this workflow tolerates a failure; a failed render fails
+      # the build.
+      fail-fast: false
+      matrix:
+        lang: ${{ fromJson(needs.languages.outputs.all) }}
+    runs-on: ubuntu-latest
+    # Read-only, and NO pushable credentials left on disk. This job executes a
+    # script extracted from a Docker image, against content a pull request
+    # controls; it must not be able to write to the repository even if that
+    # went wrong. Only assemble-deploy gets contents: write.
+    permissions:
+      contents: read
+      # pulling the render images from GHCR; harmless while they are public,
+      # correct if any is ever made private
+      packages: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.languages.outputs.sha }}
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Install PyYAML
+        run: pip install --quiet pyyaml
+
+      # Authenticate to GHCR with the run's own GITHUB_TOKEN -- NOT a personal
+      # access token. This repository stored a contributor's PAT as
+      # GHCR_READ_TOKEN when the 2.7 images were private; nothing needs it now.
+      # GITHUB_TOKEN is minted per run, owned by the repository rather than a
+      # person, and expires when the run ends. aedockerpublic already uses it
+      # the same way to PUSH these images.
+      #
+      # The images are PUBLIC, so this login is not required for the pull to
+      # work -- it raises the anonymous pull rate limit, which matters because
+      # nine language legs pull concurrently on cold runners. It must therefore
+      # never be fatal: on a fork, or a registry hiccup, the build continues
+      # and pulls anonymously.
+      #
+      # Unlike a stored secret, GITHUB_TOKEN exists on FORK pull requests too
+      # (read-only), so forks get authenticated pulls rather than being handed
+      # nothing.
+      - name: Log in to GHCR (optional -- images are public)
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" \
+            | docker login ghcr.io -u "${{ github.actor }}" --password-stdin \
+            || echo "::warning::GHCR login failed; continuing with anonymous pulls (the images are public)"
+
+      # The login step this replaces existed only because the 2.7 per-chapter
+      # images were private and needed a credential GitHub withholds from forks.
+      #
+      # Two things follow. A fork pull request now RENDERS -- GitHub withholds
+      # secrets from a fork and nothing here wants one -- though it still cannot
+      # DEPLOY: assemble-deploy force-pushes, and a fork PR gets a read-only
+      # GITHUB_TOKEN whatever `permissions:` asks for, so the push fails and the
+      # run goes red on a contribution that is fine. Publishing previews for
+      # forks needs a different design; see README, "The three environments".
+      # And a registry hiccup during authentication can no longer kill a render
+      # -- a transient runner DNS failure took out a 25-minute leg that way
+      # (run 30141571465).
+      #
+      # NOTE: this workflow does NOT restrict which images docker-images.yml may
+      # name. Only the `registry` prefix is pinned, below. Any public image in
+      # that GHCR namespace can be selected by a pull request and executed on
+      # the runner. That is a real gap, not an oversight to rediscover.
+      #
+      # If an image is ever made private again, the pull fails naming the image
+      # it wanted, which is where you want to find out. Do not reintroduce a
+      # login without first checking every image in docker-images.yml.
+
+      - name: Read registry prefix from docker-images.yml
+        id: registry
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import sys
+          import yaml
+
+          with open("docker-images.yml") as fh:
+              cfg = yaml.safe_load(fh)
+          prefix = str(cfg["registry"])
+          # docker-images.yml is PR-controlled and this value names the image
+          # whose /usr/local/bin/build_all_chapters.sh is EXECUTED on the
+          # runner. Pin it to the expected registry and allow only characters
+          # that can appear in an image reference.
+          # Exact equality. This value selects the image whose script is
+          # executed on the runner, so a pattern match is not good enough:
+          # a permissive one still accepts a trailing slash, ".." components,
+          # or a different appliedepi package namespace.
+          if prefix != "ghcr.io/appliedepi/aedockerpublic":
+              sys.exit(f"::error::docker-images.yml registry {prefix!r} is not the expected ghcr.io/appliedepi/aedockerpublic")
+          print(f"prefix={prefix}")
+          PY
+
+      # build_all_chapters.sh runs on the RUNNER, not in a container (it
+      # itself launches one docker run per chapter), so it is extracted from
+      # the common image rather than executed inside it -- exactly the
+      # mechanism this script's own header documents:
+      #   docker run --rm <common-image> cat /usr/local/bin/build_all_chapters.sh
+      - name: Extract build_all_chapters.sh from the common image
+        env:
+          PREFIX: ${{ steps.registry.outputs.prefix }}
+        run: |
+          docker pull "$PREFIX/epirhandbook-common:2.9"
+          docker run --rm "$PREFIX/epirhandbook-common:2.9" \
+            cat /usr/local/bin/build_all_chapters.sh > build_all.sh
+          chmod +x build_all.sh
+
+      # html_outputs is the Quarto output-dir. It is NOT tracked in git, but a
+      # stale one must never survive into a render: this repo used to commit
+      # html_outputs/, and the committed copy leaked a whole abandoned layout
+      # onto the deploy branches. Start every leg from nothing.
+      - name: Start from a clean output directory
+        run: rm -rf html_outputs
+
+      # build_all_chapters.sh renders ONE language per leg via --only-lang,
+      # and does both cross-reference passes internally (its render_pass ... 1
+      # then ... 2). Under --only-lang the language's site lands at the ROOT of
+      # the output dir, with no <lang>/ nesting -- there is nothing to nest it
+      # under, because no other language was rendered. That leg also writes no
+      # images/ copy and no root redirect stub. So it uploads html_outputs
+      # as-is, and assemble-deploy nests it and writes both.
+      #
+      # --no-inject is REQUIRED here, not an optimisation.
+      # inject_language_links.R reuses an existing <ul id="languages-links">
+      # instead of rebuilding it, so injecting per-leg AND again over the
+      # assembled site would append a second set of links to every translated
+      # page. The switcher is injected exactly once, in Job 2, over the
+      # complete tree.
+      #
+      # The tee keeps the full output for check 17, and pipefail keeps the exit
+      # status of build_all.sh instead of the exit status of tee. The log sits
+      # outside html_outputs, so the artifact does not carry it.
+      - name: Render this language (two passes, internal to the script)
+        env:
+          LANG_CODE: ${{ matrix.lang }}
+          PREFIX: ${{ steps.registry.outputs.prefix }}
+        run: |
+          set -o pipefail
+          ./build_all.sh --only-lang "$LANG_CODE" --no-inject . "$PREFIX" html_outputs 2>&1 \
+            | tee render.log
+
+      # Check 17. It fails on an R warning or an unexpected R error in render.log,
+      # and on stderr output or a render-machine path in a page. See checks/README.md.
+      - name: Check the render log and pages of this language
+        run: python3 checks/check-render-leg.py html_outputs render.log
+
+      # The landing-page transport gate, rule 9 of checks/check-landing-strings.py. It reads
+      # every hero and band slot out of the page this leg rendered and compares each one
+      # against landing.yml, the English fallback included. Without it a landing.yml value
+      # that never reaches its slot ships clean in eight language editions.
+      #
+      # It runs HERE, in the render leg, for three reasons:
+      #   --only-lang writes this language's site to the ROOT of the output dir, so the page
+      #     is html_outputs/index.html and --pages names it.
+      #   --no-inject means nothing re-serialised the page yet, so the slot patterns read
+      #     what Quarto wrote.
+      #   A leg that renders a broken hero fails before it uploads an artifact.
+      # The check reads landing.yml with PyYAML. The "Install PyYAML" step of this
+      # same job already supplies it, so this step installs nothing.
+      - name: Check this language's landing page slots
+        env:
+          LANG_CODE: ${{ matrix.lang }}
+        run: |
+          python3 checks/check-landing-strings.py \
+            --slots --only "$LANG_CODE" --pages html_outputs/index.html
+
+      - name: Upload this language's output
+        uses: actions/upload-artifact@v4
+        with:
+          name: site-${{ matrix.lang }}
+          path: html_outputs
+          if-no-files-found: error
+
+  assemble-deploy:
+    needs: [languages, render]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.languages.outputs.sha }}
+
+      - name: Download every language's artifact
+        uses: actions/download-artifact@v4
+        with:
+          path: downloaded
+
+      # Every language lands under its own <lang>/, the main language
+      # included. Each one carries its own images/ copy, so a language folder
+      # is a complete site on its own. The site root holds a redirect stub to
+      # the main language and nothing else: no page, and no images/ copy.
+      #
+      # This step reads downloaded/ and never writes to it. The artifacts are
+      # the render legs' only output, and a second run of this step must see
+      # what the first one saw.
+      - name: Assemble one site tree
+        env:
+          MAINLANGUAGE: ${{ needs.languages.outputs.mainlanguage }}
+          ALL_LANGS: ${{ needs.languages.outputs.all }}
+        run: |
+          mainlanguage="$MAINLANGUAGE"
+          # ALL_LANGS is the JSON list the languages job printed, for example
+          # ["en", "fr"]. Every code in it already matched [a-z]{2,3} there.
+          langs="$(printf '%s' "$ALL_LANGS" | tr -d '[]" ' | tr ',' ' ')"
+          if [ -z "$langs" ]; then
+            echo "::error::ALL_LANGS is empty; the languages job declared no language" >&2
+            exit 1
+          fi
+
+          # A declared language with no artifact means a render leg produced
+          # nothing. Deploying the rest would drop that language from the site
+          # silently, and the switcher would still link to it.
+          for lang in $langs; do
+            if [ ! -d "downloaded/site-$lang" ]; then
+              echo "::error::languages.yml declares '$lang', but no artifact site-$lang was downloaded" >&2
+              exit 1
+            fi
+          done
+
+          # The other direction. An artifact for a code languages.yml does not
+          # declare would publish a directory the switcher never links to.
+          mkdir -p site
+          for dir in downloaded/site-*; do
+            code="$(basename "$dir")"
+            code="${code#site-}"
+            case " $langs " in
+              *" $code "*) ;;
+              *) echo "::error::artifact site-$code is not a language languages.yml declares ($langs)" >&2; exit 1 ;;
+            esac
+            mkdir -p "site/$code"
+            cp -a "$dir/." "site/$code/"
+          done
+
+          # Every language folder is self-contained: it carries its own
+          # images/ copy, and its pages reach that copy relatively. No page
+          # holds a root-absolute path, so the Cloudflare rule that redirects
+          # root paths into /<mainlanguage>/ never sees an image request. It
+          # also makes one language folder a standalone site, which is what
+          # the offline zip needs.
+          for lang in $langs; do
+            mkdir -p "site/$lang/images"
+            cp -a images/. "site/$lang/images"/
+          done
+
+          # There is deliberately NO images/ copy at the site root. Cloudflare
+          # 301s every root path into /<mainlanguage>/, verified against the
+          # live site on 2026-09-16:
+          #   /images/Applied_Epi_logo.png
+          #     -> 301 -> /en/images/Applied_Epi_logo.png -> 200
+          # So a link that predates this layout is redirected into a language
+          # folder and served from that language's own copy. A root copy could
+          # never be reached.
+          #
+          # Leaving one out also makes a whole class of bug impossible rather
+          # than merely detected: with a root copy present, a page path with
+          # one ../ too many resolves to a real file, so it passes an existence
+          # check while the browser still requests /images/. Without it, that
+          # path resolves to nothing.
+
+          # Each page carries the ../../images/ of content/<lang>/_quarto.yaml,
+          # which is relative to that language's project directory. Rewrite it
+          # to a path relative to the page's OWN depth under site/<lang>/: a
+          # chapter at site/en/gis.html gets images/, an alias stub at
+          # site/en/new_pages/gis.en.html gets ../images/.
+          #
+          # This step only rewrites. The check is a separate step, after the
+          # switcher injection, because that injection is the last thing that
+          # rewrites a page.
+          #
+          # build_all_chapters.sh still writes one root images/ copy and does
+          # no rewrite, so a local whole-book render does not match this tree.
+          # Bringing it into line needs a new image line: epirhandbook#455,
+          # box F50.
+          python3 - "$langs" <<'PY'
+          import pathlib
+          import re
+          import sys
+
+          langs = sys.argv[1].split()
+          site = pathlib.Path("site")
+
+          # Any number of ../ before images/ names the shared assets folder.
+          # The handbook has no other directory of that name.
+          emitted = re.compile(r'(src|href)="(?:\./)?(?:\.\./)+images/')
+
+          rewritten = 0
+          for lang in langs:
+              root = site / lang
+              for page in root.rglob("*.html"):
+                  depth = len(page.relative_to(root).parts) - 1
+                  prefix = "../" * depth
+                  before = page.read_text(encoding="utf-8", errors="surrogateescape")
+                  after = emitted.sub(lambda m: f'{m.group(1)}="{prefix}images/', before)
+                  if after != before:
+                      page.write_text(after, encoding="utf-8", errors="surrogateescape")
+                      rewritten += 1
+          print(f"rewrote the images path on {rewritten} page(s)")
+          PY
+
+          # The root redirect stub, byte-for-byte what build_all_chapters.sh
+          # writes for a whole-book render. Four lines, and the only page at
+          # the site root.
+          printf '%s\n' \
+            '<!DOCTYPE html>' \
+            "<html lang=\"$mainlanguage\"><head><meta charset=\"utf-8\"><title>Redirect to $mainlanguage/</title>" \
+            "<meta http-equiv=\"refresh\" content=\"0;URL='$mainlanguage/'\"><link rel=\"canonical\" href=\"$mainlanguage/\"></head>" \
+            '<body></body></html>' \
+            > site/index.html
+
+      # Same GITHUB_TOKEN login as the render job, and non-fatal for the same
+      # reason: the image is public, so this only buys rate-limit headroom.
+      - name: Log in to GHCR (optional -- images are public)
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" \
+            | docker login ghcr.io -u "${{ github.actor }}" --password-stdin \
+            || echo "::warning::GHCR login failed; continuing with anonymous pulls (the images are public)"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Install PyYAML
+        run: pip install --quiet pyyaml
+
+      - name: Read registry prefix from docker-images.yml
+        id: registry
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import sys
+          import yaml
+
+          with open("docker-images.yml") as fh:
+              cfg = yaml.safe_load(fh)
+          prefix = str(cfg["registry"])
+          # docker-images.yml is PR-controlled and this value names the image
+          # whose /usr/local/bin/build_all_chapters.sh is EXECUTED on the
+          # runner. Pin it to the expected registry and allow only characters
+          # that can appear in an image reference.
+          # Exact equality. This value selects the image whose script is
+          # executed on the runner, so a pattern match is not good enough:
+          # a permissive one still accepts a trailing slash, ".." components,
+          # or a different appliedepi package namespace.
+          if prefix != "ghcr.io/appliedepi/aedockerpublic":
+              sys.exit(f"::error::docker-images.yml registry {prefix!r} is not the expected ghcr.io/appliedepi/aedockerpublic")
+          print(f"prefix={prefix}")
+          PY
+
+      # The mandatory post-render pass: the switcher is never produced by
+      # rendering, only by this. It runs once, over the FULLY assembled tree,
+      # with every language in it. languages.yml carries the codes and the
+      # display labels, and comes from this job's own fresh checkout. It is
+      # mounted read-only, so the injector cannot write to it.
+      - name: Inject language-switcher links
+        env:
+          PREFIX: ${{ steps.registry.outputs.prefix }}
+        run: |
+          docker pull "$PREFIX/epirhandbook-common:2.9"
+          docker run --rm \
+            -v "$PWD/site:/site" \
+            -v "$PWD/languages.yml:/quarto/languages.yml:ro" \
+            -w /site "$PREFIX/epirhandbook-common:2.9" \
+            inject_language_links.sh /site /quarto/languages.yml
+
+      # The gate runs HERE, not inside the assemble step, because the
+      # injection above is the LAST thing that rewrites a page.
+      # inject_language_links.R parses each page with xml2::read_html() and
+      # writes it back with xml2::write_html(), so libxml2 re-serialises the
+      # whole document, every image attribute included. A gate that ran before
+      # that would grade a tree nobody deploys.
+      #
+      # The invariant is CONTAINMENT, not existence. A reference on a page
+      # under site/<lang>/ MUST resolve inside site/<lang>/images/. Existence
+      # alone is not enough: the root site/images/ compatibility copy makes a
+      # path with one ../ too many resolve to a real file, so a page that
+      # still reaches the site root would pass an existence check while the
+      # browser requests exactly the /images/ path this layout removes.
+      - name: Check every image reference in the tree about to be deployed
+        env:
+          ALL_LANGS: ${{ needs.languages.outputs.all }}
+        run: |
+          python3 - "$ALL_LANGS" <<'PY'
+          import pathlib
+          import re
+          import sys
+          from urllib.parse import unquote
+
+          langs = [c.strip() for c in sys.argv[1].strip("[] ").replace('"', "").split(",")]
+          langs = [c for c in langs if c]
+          if not langs:
+              sys.exit("::error::ALL_LANGS named no language")
+
+          site = pathlib.Path("site").resolve()
+          shared = sorted(p.name for p in pathlib.Path("images").rglob("*") if p.is_file())
+
+          reference = re.compile(r'(?:src|href)="((?:\.\./)*images/[^"]+)"')
+          # Deliberately wider than the form Quarto emits: a single quote, a
+          # space around the =, or a change of case must not slip past.
+          absolute = re.compile(r'(?i)(?:src|href)\s*=\s*["\']?/images/')
+
+          rooted = []
+          escaped = []
+          missing = []
+          resolved = {code: 0 for code in langs}
+
+          for page in sorted(site.rglob("*.html")):
+              text = page.read_text(encoding="utf-8", errors="surrogateescape")
+              shown = page.relative_to(site)
+              if absolute.search(text):
+                  rooted.append(str(shown))
+              parts = shown.parts
+              code = parts[0] if len(parts) > 1 and parts[0] in resolved else None
+              own = (site / code / "images").resolve() if code else None
+              for match in reference.finditer(text):
+                  path = unquote(match.group(1).split("#")[0].split("?")[0])
+                  target = (page.parent / path).resolve()
+                  if code is None:
+                      escaped.append(f"{shown} -> {match.group(1)}")
+                  elif own not in target.parents:
+                      escaped.append(f"{shown} -> {match.group(1)}")
+                  elif not target.is_file():
+                      missing.append(f"{shown} -> {match.group(1)}")
+                  else:
+                      resolved[code] += 1
+
+          if rooted:
+              sys.exit("::error::a root-absolute /images/ survives on: " + ", ".join(rooted[:10]))
+          if escaped:
+              sys.exit("::error::an images/ reference leaves its own language folder: " + "; ".join(escaped[:10]))
+          if missing:
+              sys.exit("::error::an images/ reference resolves to no file: " + "; ".join(missing[:10]))
+
+          # Per language, not per site. A site-wide floor of one reference
+          # passes while seven of the eight languages have lost their images.
+          for code in langs:
+              copy = site / code / "images"
+              if not copy.is_dir():
+                  sys.exit(f"::error::site/{code}/images is missing -- that language has no images copy")
+              links = sorted(str(p.relative_to(site)) for p in copy.rglob("*") if p.is_symlink())
+              if links:
+                  sys.exit("::error::symlinked image asset(s), which a static host does not serve as files: " + ", ".join(links[:10]))
+              here = sorted(p.name for p in copy.rglob("*") if p.is_file())
+              if here != shared:
+                  sys.exit(
+                      f"::error::site/{code}/images holds {len(here)} file(s), the repository's "
+                      f"images/ holds {len(shared)} -- the copy is incomplete"
+                  )
+              if resolved[code] == 0:
+                  sys.exit(f"::error::no page under site/{code}/ references images/ -- the rewrite matched nothing there")
+
+          print(f"checked {sum(resolved.values())} images/ reference(s) across {len(langs)} language(s)")
+          for code in langs:
+              print(f"  {code}: {resolved[code]} reference(s) resolving inside site/{code}/images/, {len(shared)} image file(s)")
+          PY
+
+      # Check 18. Every relative href and src in the tree about to be deployed
+      # must resolve to a file, and every #fragment to an id on its target page.
+      # It runs after the switcher injection, which writes links of its own, and
+      # before the zip and the deploy. See checks/README.md.
+      - name: Check every link in the tree about to be deployed
+        run: python3 checks/check-site-links.py site
+
+      # The offline download. Each language folder is already a complete site,
+      # so a zip of it opens from the filesystem with working navigation, links
+      # and images. Two scripts below rewrite each offline copy, never site/, so
+      # the table of contents and the search box also work from file://.
+      #
+      # PUBLISHING IS GATED ON PROVENANCE, NOT ON A STRING. inputs.branch is
+      # supplied by the caller, and for a pull_request event the caller's own
+      # workflow file comes from the PR head, so a same-repository PR could
+      # edit preview.yml to pass 'staging'. github.ref is set by the event and
+      # a PR cannot forge it: it is refs/pull/<n>/merge there, never
+      # refs/heads/main. Both conditions, on both steps.
+      #
+      # This runs BEFORE the deploy step, which checks out an orphan branch and
+      # deletes site/. The zips live under /tmp, which that step does not touch.
+      - name: Zip each language for the offline download
+        if: inputs.branch == 'staging' && github.ref == 'refs/heads/main'
+        env:
+          ALL_LANGS: ${{ needs.languages.outputs.all }}
+        run: |
+          rm -rf /tmp/offline-zips /tmp/offline-pkg
+          mkdir -p /tmp/offline-zips /tmp/offline-pkg
+          langs="$(printf '%s' "$ALL_LANGS" | tr -d '[]" ' | tr ',' ' ')"
+
+          # A symlink in a zip is not a file a static host or a Windows reader
+          # can open, and Info-ZIP's handling of one depends on flags this step
+          # does not set. Refuse rather than ship an archive whose behaviour
+          # depends on the unzipping tool.
+          odd="$(find site -mindepth 1 \( -type l -o \! -type f -a \! -type d \) -print)"
+          if [ -n "$odd" ]; then
+            echo "::error::site/ holds a symlink or a special file, which does not belong in an offline zip:" >&2
+            printf '%s\n' "$odd" >&2
+            exit 1
+          fi
+
+          for lang in $langs; do
+            # The top entry in the zip is the folder name the reader sees after
+            # unzipping. Name it, rather than leaving a bare "en".
+            pkg="epirhandbook-$lang"
+            cp -a "site/$lang" "/tmp/offline-pkg/$pkg"
+            # Quarto loads quarto.js as an ES module, which a browser refuses
+            # on file://, and quarto.js builds the margin table of contents.
+            python3 checks/offline-classic-scripts.py "/tmp/offline-pkg/$pkg"
+            # quarto-search.js fetches search.json, which a browser also refuses
+            # on file://. Ship the index as a script instead.
+            python3 checks/offline-search.py "/tmp/offline-pkg/$pkg"
+            ( cd /tmp/offline-pkg && zip -qr "/tmp/offline-zips/$pkg.zip" "$pkg" )
+            rm -rf "/tmp/offline-pkg/$pkg"
+          done
+
+          # Check the artefact against its SOURCE, not against a floor. A zip
+          # holding index.html and one image satisfies any "is it plausible"
+          # test while missing every chapter. So compare the member list with
+          # the tree it was built from: same relative paths, same count.
+          python3 - "$langs" <<'PY'
+          import pathlib
+          import sys
+          import zipfile
+
+          import yaml
+
+          langs = sys.argv[1].split()
+
+          # languages.yml is the one file that declares which languages ship.
+          # An empty or short ALL_LANGS would otherwise check nothing and pass.
+          # BaseLoader keeps every scalar a string, so an unquoted `no` stays
+          # the code `no`. yaml.safe_load reads it as False.
+          declared = [str(entry["code"]) for entry in
+                      yaml.load(pathlib.Path("languages.yml").read_text(encoding="utf-8"),
+                                Loader=yaml.BaseLoader)["languages"]]
+          if sorted(langs) != sorted(declared):
+              sys.exit(f"::error::ALL_LANGS is {sorted(langs)}, languages.yml declares {sorted(declared)}")
+
+          site = pathlib.Path("site")
+          out = pathlib.Path("/tmp/offline-zips")
+          for lang in langs:
+              z = out / f"epirhandbook-{lang}.zip"
+              if not z.is_file():
+                  sys.exit(f"::error::{z.name} was not written")
+              with zipfile.ZipFile(z) as zf:
+                  corrupt = zf.testzip()
+                  if corrupt is not None:
+                      sys.exit(f"::error::{z.name} is corrupt, first bad entry {corrupt}")
+                  entries = zf.namelist()
+              names = [n for n in entries if not n.endswith("/")]
+
+              root = f"epirhandbook-{lang}/"
+              tops = {n.split("/", 1)[0] for n in entries}
+              if tops != {f"epirhandbook-{lang}"}:
+                  sys.exit(f"::error::{z.name} has top-level entries {sorted(tops)}, expected one folder epirhandbook-{lang}")
+              if f"{root}index.html" not in names:
+                  sys.exit(f"::error::{z.name} has no {root}index.html, which is the file the download page names")
+
+              source = {str(p.relative_to(site / lang)) for p in (site / lang).rglob("*") if p.is_file()}
+              packed = {n[len(root):] for n in names}
+              packed_full = set(names)
+              # checks/offline-search.py adds search.js to the offline copy
+              # only. It is the one file the zip MUST hold beyond site/<lang>.
+              added = {"search.js"}
+              lost = sorted(source - packed)
+              extra = sorted(packed - source - added)
+              if added & source:
+                  sys.exit(f"::error::site/{lang} already holds {sorted(added & source)}, which the offline rewrite would overwrite")
+              if not added <= packed:
+                  sys.exit(f"::error::{z.name} is missing {sorted(added - packed)}, which the offline rewrite adds")
+              if lost:
+                  sys.exit(f"::error::{z.name} is missing {len(lost)} file(s) present in site/{lang}, first: {lost[:5]}")
+              if extra:
+                  sys.exit(f"::error::{z.name} holds {len(extra)} file(s) absent from site/{lang}, first: {extra[:5]}")
+
+              # The manifest above proves the zip matches site/<lang>. It cannot
+              # prove site/<lang> is complete: a render leg that dropped half
+              # the book would zip faithfully and pass. So check the zip
+              # against what the language DECLARES, which is the chapter list
+              # in its own project file.
+              # Parsed with PyYAML, installed by an earlier step in this job.
+              # book.chapters nests: a part is a dict carrying its own chapters.
+              # The walk is project() in checks/langs.py. A part may name a
+              # .qmd file instead of a title. Quarto renders that file as the
+              # part page, so it is a chapter too, and it comes before the
+              # part's own chapters.
+              project = pathlib.Path("content") / lang / "_quarto.yaml"
+
+              def stems(items):
+                  found = []
+                  for item in items if isinstance(items, list) else []:
+                      if isinstance(item, str) and item.endswith(".qmd"):
+                          found.append(item[:-4])
+                      elif isinstance(item, dict):
+                          part = item.get("part")
+                          if isinstance(part, str) and part.endswith(".qmd"):
+                              found.append(part[:-4])
+                          found.extend(stems(item.get("chapters")))
+                  return found
+
+              declared_chapters = stems(yaml.load(project.read_text(encoding="utf-8"),
+                                                  Loader=yaml.BaseLoader)["book"]["chapters"])
+              if not declared_chapters:
+                  sys.exit(f"::error::no chapter list parsed from {project}")
+              absent = sorted(s for s in declared_chapters if f"{root}{s}.html" not in packed_full)
+              if absent:
+                  sys.exit(
+                      f"::error::{z.name} is missing {len(absent)} declared chapter(s) of "
+                      f"{len(declared_chapters)}, first: {absent[:5]}"
+                  )
+
+              pages = [n for n in names if n.endswith(".html")]
+              images = [n for n in names if n.startswith(f"{root}images/")]
+              print(f"  {z.name}: {len(names)} file(s) = site/{lang}, {len(pages)} page(s), {len(images)} image(s), {z.stat().st_size // 1048576} MB")
+          PY
+
+      # Deploy technique copied from the reference build-deploy.yml
+      # (appliedepi/websitetimecourse): force-push an orphan branch.
+      - name: Deploy to branch
+        shell: bash
+        env:
+          DEPLOY_BRANCH: ${{ inputs.branch }}
+          # The commit every leg built. GITHUB_SHA is the commit of the event,
+          # which is not always that commit.
+          SOURCE_SHA: ${{ needs.languages.outputs.sha }}
+        run: |
+          # The branch name is an input, and everything below it is
+          # destructive and ends in a force-push. Refuse to proceed on an
+          # empty or malformed name rather than discovering it at `git push`.
+          if [ -z "${DEPLOY_BRANCH:-}" ]; then
+            echo "::error::inputs.branch is empty -- refusing to deploy" >&2
+            exit 1
+          fi
+          case "$DEPLOY_BRANCH" in
+            preview|staging) ;;
+            *) echo "::error::refusing to force-push to unexpected branch '$DEPLOY_BRANCH' (expected preview or staging; production is a promotion, see production.yml)" >&2; exit 1 ;;
+          esac
+          git check-ref-format --branch "$DEPLOY_BRANCH"
+          # Staging publishes main only. GITHUB_REF is the ref of the calling
+          # event, so a staging run dispatched from another branch stops here,
+          # and so does a pull request whose preview.yml passes 'staging'.
+          if [ "$DEPLOY_BRANCH" = "staging" ] && [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::refusing to deploy $GITHUB_REF to staging; staging publishes refs/heads/main only" >&2
+            exit 1
+          fi
+          # Set git identity
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # Save the build output to a safe place outside the repo
+          cp -r site /tmp/site_output
+          # Switch to the orphan branch
+          git checkout --orphan "$DEPLOY_BRANCH"
+          # Delete all visible files
+          # In bash, '*' does not match hidden items like .git or .github.
+          # The -- stops a file name that starts with - from reading as an option.
+          rm -rf -- *
+          # Clean up remaining top-level hidden files except .git and .github
+          # This ensures a truly clean state without killing the runner metadata
+          find . -maxdepth 1 -name ".*" ! -name "." ! -name ".." ! -name ".git" ! -name ".github" -exec rm -rf {} +
+          # Copy the rendered site contents back in
+          cp -r /tmp/site_output/. .
+          # Stage all site files
+          git add -A
+          # Unstage .github so it is not included in the deployed branch
+          git rm -rf --cached .github --ignore-unmatch
+          # Commit and force push
+          git commit -m "Deploy site from ${SOURCE_SHA}"
+          git push origin "$DEPLOY_BRANCH" --force
+
+      # One rolling release, tag "offline", whose assets are replaced on every
+      # staging build. The download link in every data_used.qmd names that tag
+      # directly, so the URL never changes and the download cannot silently
+      # rot. The artefact it replaces, offline_long/, last rendered on
+      # 2026-07-24 and five of its eight advertised links were dead.
+      #
+      # KNOWN AND ACCEPTED: this tracks staging, so it tracks main. Production
+      # is a separate promotion, so after a push to main the download is ahead
+      # of the production site until that promotion runs. The download page
+      # says the zip follows the latest version of the handbook. It does not
+      # claim to match whichever page the reader is on.
+      #
+      # --latest=false keeps this out of the way if the repository later adopts
+      # versioned releases; the fixed-tag URL does not depend on "latest".
+      # The tag stays on the commit that first created it, so the release's
+      # automatic source archives do NOT track the assets. Readers are pointed
+      # at the named assets, never at those archives.
+      #
+      # --repo is explicit because the deploy step above left the checkout on an
+      # orphan branch, and gh otherwise reads the repository from local git.
+      - name: Publish the offline downloads to the rolling release
+        if: inputs.branch == 'staging' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          ALL_LANGS: ${{ needs.languages.outputs.all }}
+          SOURCE_SHA: ${{ needs.languages.outputs.sha }}
+        run: |
+          if ! gh release view offline --repo "$REPO" >/dev/null 2>&1; then
+            gh release create offline --repo "$REPO" \
+              --title "Offline downloads" \
+              --target "$SOURCE_SHA" \
+              --latest=false \
+              --notes "One zip per language, each a complete offline copy of the handbook. Unzip, then open index.html. Rebuilt automatically from the latest version of the handbook. Quarto's search box needs a web server, so it does not work offline: use Ctrl+f (Cmd+f) on the page you are reading."
+          fi
+          gh release upload offline --repo "$REPO" --clobber /tmp/offline-zips/*.zip
+
+          # gh upload replaces assets one at a time, and this job can be
+          # cancelled by a newer staging run. So confirm what the release
+          # actually carries afterwards: every declared language, at the size
+          # this run built. A partial replacement fails the build instead of
+          # leaving readers on mixed generations with nothing to notice it.
+          gh release view offline --repo "$REPO" --json assets > /tmp/release-assets.json
+          python3 - "$ALL_LANGS" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          langs = [c.strip() for c in sys.argv[1].strip("[] ").replace('"', "").split(",")]
+          langs = [c for c in langs if c]
+          if not langs:
+              sys.exit("::error::ALL_LANGS named no language")
+
+          remote = {a["name"]: a for a in json.loads(pathlib.Path("/tmp/release-assets.json").read_text())["assets"]}
+          wrong = []
+          for lang in langs:
+              name = f"epirhandbook-{lang}.zip"
+              local = pathlib.Path("/tmp/offline-zips") / name
+              if name not in remote:
+                  wrong.append(f"{name}: not on the release")
+              elif remote[name]["size"] != local.stat().st_size:
+                  wrong.append(f"{name}: release has {remote[name]['size']} bytes, this run built {local.stat().st_size}")
+          if wrong:
+              sys.exit("::error::the release does not carry what this run built: " + "; ".join(wrong))
+
+          print(f"the 'offline' release carries all {len(langs)} language(s) at this run's sizes:")
+          for lang in langs:
+              a = remote[f"epirhandbook-{lang}.zip"]
+              print(f"  {a['name']}  {a['size'] // 1048576} MB  updated {a['updatedAt']}")
+          PY

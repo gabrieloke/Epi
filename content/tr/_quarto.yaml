@@ -1,0 +1,134 @@
+# The Quarto book project for Türkçe, one of eight, one per language.
+# It declares the language, the title and the chapter list.
+# Render a chapter with content/tr as the working directory.
+# ../../ is the repository root: the banner, the theme and the images live there.
+
+project:
+  type: book
+  output-dir: html_outputs
+
+published-title: "Last updated"
+lightbox: true  # a reader can click an image to see a larger version, caption included
+
+lang: tr
+
+format:
+  html:
+    include-in-header:
+      - ../../banner.html
+    include-after-body:
+      - ../../ael-extras.html
+    theme:
+      light: [../../theme-light.scss, ../../theme-ael.scss]
+      dark: [../../theme-dark.scss, ../../theme-ael.scss]
+    number-sections: true
+    number-depth: 2
+    toc-depth: 2
+    toc-title: "İçindekiler"
+    page-layout: full
+    grid:
+      sidebar-width: 258px
+      body-width: 1000px
+      margin-width: 216px
+      gutter-width: 2.4rem
+
+book:
+  title: "Epidemiyologun R Rehberi"
+  search:
+    type: textbox
+  repo-url: https://github.com/appliedepi/epirhandbook
+  sharing: ["twitter", "facebook", "linkedin"]
+  sidebar:
+    logo: "../../images/Applied_Epi_logo.png"
+    tools:
+      - icon: twitter
+        href: "https://twitter.com/appliedepi"
+      - icon: linkedin
+        href: "https://www.linkedin.com/company/appliedepi/"
+
+  date: today
+  date-format: "MMM D, YYYY"
+  favicon: "../../images/Applied_Epi_logo.png"
+  # The footer image path MUST stay relative, like sidebar.logo above. The assemble
+  # step rewrites ../../images/ to each page's own depth under site/<lang>/, and the
+  # containment gate in build-deploy.yml then refuses a root-absolute /images/ path.
+  page-footer:
+    left: |
+      Batra, Neale, et al. The Epidemiologist R Handbook. 2021.<br>[doi.org/10.5281/zenodo.4752646](https://doi.org/10.5281/zenodo.4752646)<br>CC BY-NC-SA 4.0
+    right: |
+      ![](../../images/applied-epi-footer.png){height=66px fig-alt="Applied Epi: technical partners for public health" .nolightbox}
+  cookie-consent:
+    type: implied
+    style: simple
+    palette: dark
+  google-analytics:
+    tracking-id: "G-QXDW878QLX"
+    storage: cookies
+    anonymize-ip: true
+
+  chapters:
+  - index.qmd
+  - part: "Bu kitap hakkında"
+    chapters:
+    - editorial_style.qmd
+    - data_used.qmd
+  - part: "Temel Bilgiler"
+    chapters:
+    - basics.qmd
+    - transition_to_r.qmd
+    - packages_suggested.qmd
+    - r_projects.qmd
+    - importing.qmd
+  - part: "Veri Yönetimi"
+    chapters:
+    - cleaning.qmd
+    - dates.qmd
+    - characters_strings.qmd
+    - factors.qmd
+    - pivoting.qmd
+    - grouping.qmd
+    - joining_matching.qmd
+    - deduplication.qmd
+    - iteration.qmd
+  - part: "Analiz"
+    chapters:
+    - tables_descriptive.qmd
+    - stat_tests.qmd
+    - regression.qmd
+    - missing_data.qmd
+    - standardization.qmd
+    - moving_average.qmd
+    - time_series.qmd
+    - epidemic_models.qmd
+    - contact_tracing.qmd
+    - survey_analysis.qmd
+    - survival_analysis.qmd
+    - gis.qmd
+  - part: "Veri Görselleştirme"
+    chapters:
+    - tables_presentation.qmd
+    - ggplot_basics.qmd
+    - ggplot_tips.qmd
+    - epicurves.qmd
+    - age_pyramid.qmd
+    - heatmaps.qmd
+    - diagrams.qmd
+    - combination_analysis.qmd
+    - transmission_chains.qmd
+    - phylogenetic_trees.qmd
+    - interactive_plots.qmd
+  - part: "Raporlar ve gösterge panoları"
+    chapters:
+    - rmarkdown.qmd
+    - reportfactory.qmd
+    - flexdashboard.qmd
+    - shiny_basics.qmd
+  - part: "Çeşitli"
+    chapters:
+    - writing_functions.qmd
+    - directories.qmd
+    - collaboration.qmd
+    - errors.qmd
+    - help.qmd
+    - network_drives.qmd
+    - data_table.qmd

@@ -1,0 +1,356 @@
+# Epi R Handbook
+
+# About this handbook
+**The Epi R Handbook is a R reference manual for applied epidemiology and public health.**  
+
+***Go to www.epiRhandbook.com to see the latest version of the online handbook.***
+
+![Project logo](https://github.com/appliedepi/epirhandbook/blob/main/images/Epi%20R%20Handbook%20Banner%20Beige%201500x500.png)
+
+**This book strives to:**  
+
+* Serve as a quick epi R code reference manual  
+* Provide task-centered examples addressing common epidemiological problems  
+* Assist epidemiologists transitioning to R  
+* Be accessible in settings with low internet-connectivity via an **offline version**
+  
+
+<img src="https://github.com/appliedepi/epirhandbook/blob/main/images/epiRhandbook_HexSticker_500x500.png" width="200" height="200">
+
+<span style="color: black;">**Written by epis, for epis**</span>
+We are applied epis from around the world, writing in our spare time to offer this resource to the community. Your encouragement and feedback is most welcome:  
+
+* Structured **[feedback form](https://forms.gle/A5SnRVws7tPD15Js9)**  
+* Email **epiRhandbook@gmail.com** or tweet **[\@epiRhandbook](https://twitter.com/epirhandbook)**  
+* Submit issues to our **[Github repository](https://github.com/epirhandbook/Epi_R_handbook)**  
+
+
+> **Upgrading from an earlier version?**
+> [STAKEHOLDERS.md](modernization/STAKEHOLDERS.md) explains what changed for readers and authors in
+> 2.7 — which chapters were edited, what readers will notice, and the decisions behind two chapters
+> that are no longer included.
+
+## How to use this handbook  
+
+
+* Browse the pages in the Table of Contents, or use the search box
+* Click the "copy" icons to copy code  
+* You can follow-along with [the example data][Download handbook and data]  
+* See the "Resources" section of each page for further material  
+
+**Offline version**  
+
+See instructions in the [Download handbook and data] page.  
+
+**Languages**  
+
+We want to translate this into languages other than English. If you can help, please contact us.  
+
+
+
+## How this all works
+
+This section explains how the handbook is built, translated, and published. It is for
+anyone changing a chapter, adding a language, or debugging a broken build.
+
+### The two-repo split
+
+Two repositories build this handbook, and each owns a different part:
+
+* **[appliedepi/aedockerpublic](https://github.com/appliedepi/aedockerpublic)** owns the R
+  packages, the Docker images, and the render scripts.
+* **This repository** owns the `.qmd` content, in every language, and the choice of
+  which image renders each chapter.
+
+Neither repository fetches from the other at build time.
+
+They are split because a chapter's prose and a chapter's package set change on
+different schedules, and by different people. An author can fix a sentence today
+without waiting on a package upgrade. A package upgrade can happen without touching
+a single word of text.
+
+### The manifest
+
+`docker-images.yml`, in this repository, maps each chapter to a Docker image.
+
+Each chapter gets **one entry**, called a "stem" (e.g. `time_series`). One entry
+covers all of that chapter's languages, because a translation runs the same R code
+as the English original, so it needs the same packages.
+
+To move one chapter to a different image version, change that one line.
+
+The language list is **not** in this manifest. It lives in `languages.yml`.
+
+### How languages are handled
+
+`languages.yml` declares each language: its code, its BCP-47 `lang` tag, its display label and its book title. Every
+check in `checks/check-sync.sh` reads it. English is the main language.
+
+Each language owns one folder, `content/<lang>/`. That folder holds the language's chapter
+files, named `<stem>.qmd`, and one Quarto book project, `content/<lang>/_quarto.yaml`. The
+project file declares the language, the title and the chapter list. Each language renders under
+its own site path: `/en/`, `/fr/`, and so on.
+
+The eight project files declare the same 51 stems in the same order. Check 9 of
+`checks/check-sync.sh` reports a language that drifts from that. One of the 51 is not a
+chapter: `index.qmd`. That is why the landing page hero counts 50 chapters.
+
+German is not shipped. Its files sit in `_excluded/`, and `_excluded/de/README.md` says why.
+
+Old `/new_pages/...` URLs still work. Every chapter file except `index.qmd` carries an
+`aliases:` entry in its front matter. Quarto turns that into a redirect stub at the old path:
+
+```
+---
+aliases:
+  - /new_pages/time_series.html
+---
+```
+
+English writes `/new_pages/<stem>.html`. Every other language writes
+`/new_pages/<stem>.<lang>.html`, so French writes `/new_pages/time_series.fr.html`. Check 9 of
+`checks/check-sync.sh` enforces it. A chapter file that lacks the alias, or carries the wrong
+one, is a drift.
+
+A chapter that also replaces a second old URL carries a second alias line.
+`content/en/transition_to_r.qmd` is today's one example. It carries
+`/new_pages/transition_to_R.html` as well, the old spelling with a capital R.
+
+The alias value must be root-relative: it must start with a leading `/`. Without the leading
+slash, Quarto writes the redirect stub in the wrong place, and the old link stays broken.
+
+### The three environments
+
+Three environments publish from this repository:
+
+* **`preview`** — one build per pull request.
+* **`staging`** — builds on every push to `main`.
+* **`production`** — updated only when a release is published, by promoting
+  staging. Nothing is rendered at release time.
+
+**Production is a promotion of staging, not a rebuild.** Cutting a release force-pushes
+the already-built `staging` artifact to `production`. Nothing is rebuilt at release
+time. What goes live is exactly what was already reviewed on staging, not a fresh
+render that might behave differently.
+
+**`production` has not been used yet.** The branch does not exist on the remote and
+`production.yml` has never run. It is kept ready for the first promotion.
+
+**A fork pull request now renders, but still cannot publish a preview.** Be clear about which
+half of that changed.
+
+The 2.9 images are public, so the build authenticates to nothing and every image pull is
+anonymous. A fork PR therefore gets all the way through the render, where it previously died
+at a login step it could never pass. That is genuinely useful: it proves the contributor's
+chapters build.
+
+It stops at the deploy. `assemble-deploy` force-pushes the `preview` branch, and GitHub gives
+a pull request opened from a fork a **read-only** `GITHUB_TOKEN` no matter what `permissions:`
+the workflow asks for. So the push fails and the run goes red, even though nothing is wrong
+with the contribution. **A red check on a fork PR does not mean the change is broken** — look
+at whether the render jobs passed. Publishing a preview for a fork needs a different design
+(a `pull_request_target` deploy, or an upload-artifact-and-comment flow); we have not built it.
+
+Removing the login did remove a whole class of failure: a registry or DNS hiccup during
+authentication can no longer kill a 25-minute render. If an image is ever made private again,
+the pull fails naming the image it wanted, which is where you want to find out.
+
+### Setting up to contribute
+
+You do not need to install R, Quarto, or any package to work on this handbook. The
+environment ships as a container.
+
+Open the repository in a **dev container**. `.devcontainer.json` at the repository root
+names the image:
+
+```json
+{
+  "name": "epirhandbook",
+  "image": "ghcr.io/appliedepi/aedockerpublic/epirhandbook-monolith:2.9"
+}
+```
+
+1. Install [Positron](https://positron.posit.co/) (or VS Code) and Docker.
+2. Clone this repository and open the folder.
+3. Accept the "Reopen in Container" prompt. See
+   [Positron's dev containers guide](https://positron.posit.co/dev-containers.html).
+
+The image is **public** — no `docker login`, no token, no Applied Epi account.
+
+**Why the monolith.** CI renders each chapter in its own group image, holding only that
+group's packages. The monolith holds all of them at once. It is generated from the six
+group images rather than maintained by hand, so it cannot drift from what CI uses. One
+container therefore renders any chapter. That is what you want while editing. It is what
+you do not want in CI, where a smaller image is faster.
+
+To render a single chapter inside the container, work from that chapter's language folder:
+
+```bash
+cd content/en
+quarto render epicurves.qmd
+```
+
+Quarto reads `content/en/_quarto.yaml` from that folder, so every relative path in the chapter
+resolves. Rendering the whole book in all eight languages is CI's job, not something to do
+locally.
+
+**If you add a package**, that is a change to
+[appliedepi/aedockerpublic](https://github.com/appliedepi/aedockerpublic), not to this
+repository. Add the package to the chapter's group list there, rerun
+`epirhandbook/2.9/generate_groups.py`, and commit — the group images and the monolith
+are regenerated from the same source, so they cannot disagree.
+
+### Publishing an update, end to end
+
+This is the same flow as
+[appliedepi/websitetimecourse](https://github.com/appliedepi/websitetimecourse). Content
+changes, translations included, all go through it.
+
+1. Create a branch off `main` and make your edits.
+2. Check they render locally.
+3. Open a pull request into `main`.
+4. That triggers a build to the **`preview`** branch. View it at the preview website
+   URL. **Check it before merging.**
+5. Merge the pull request into `main`. That triggers a build to the **`staging`**
+   branch. Check the build succeeded.
+6. If staging is good, create a GitHub release, following the versioning conventions.
+   That pulls `staging` into `production`, and a webhook updates the live site.
+
+Only rendered HTML reaches `preview`, `staging` and `production`. They are orphan
+branches: CI force-pushes them, nothing is ever merged into them, and they contain no
+`.qmd` source. The source lives on `main` and nowhere else.
+
+Nothing is re-rendered at release time. Step 6 copies the artifact you already checked
+in step 5, so what goes live is exactly what was reviewed.
+
+### Where things live
+
+| To change... | Edit... |
+|---|---|
+| A chapter's prose | this repository, in `content/<lang>/` |
+| Which languages ship | `languages.yml`, in this repository |
+| A chapter's R packages | [appliedepi/aedockerpublic](https://github.com/appliedepi/aedockerpublic) |
+| Which image a chapter uses | `docker-images.yml`, in this repository |
+| The landing page's hero text | `landing.yml`, in this repository. Its markup is `utils/landing-hero.R` |
+
+### Routine maintenance
+
+**Bump one chapter's image.** Edit that chapter's row in `docker-images.yml` to
+point at the new image tag. Every other chapter keeps its own tag and is
+unaffected.
+
+**Add a new chapter.** Five things, across both repositories:
+
+1. A `.qmd` file in `content/en/`, and a translated file in each other `content/<lang>/`.
+2. An image in aedockerpublic: a new one, or an existing one that already has the right
+   packages.
+3. A new row in `docker-images.yml`, in this repository.
+4. A new entry under `book.chapters` in every `content/<lang>/_quarto.yaml`, at the same
+   position in each.
+5. The standard alias in the chapter's own front matter: `/new_pages/<stem>.html` under
+   `content/en/`, `/new_pages/<stem>.<lang>.html` elsewhere. The value needs a leading `/`.
+
+Run `checks/check-sync.sh` afterwards. Check 9 reports a language you missed.
+
+**Add a new language.** Six things, all in this repository:
+
+1. An entry in `languages.yml` with four fields: `code`, `lang`, `label` and `title`. `code` names the folder and the site path. `lang` is the BCP-47 tag, and it can differ from the code: Japanese is `code: jp` with `lang: ja`.
+2. A folder `content/<code>/` with a translated `<stem>.qmd` for each of the 51 stems that `content/en/` holds.
+3. A `content/<code>/_quarto.yaml`, copied from `content/en/_quarto.yaml`. Set `lang:` to the `lang` value and `book.title` to the `title` value from `languages.yml`. Keep the chapter list and its order unchanged.
+4. The alias in each chapter's front matter, `/new_pages/<stem>.<code>.html`. In `index.qmd` the alias is `/index.<code>.html` instead. Check 9 does not check `index.qmd`, so get that one right by hand.
+5. A `<code>:` block in `landing.yml` for the landing page strings. A missing string falls back to English. Check 15 names every translatable key the block lacks, apart from the two omissions it allows on purpose.
+6. For a script that is not Latin, check two places. The `subset=` list in the webfont link in `banner.html` sets which scripts the webfonts serve. The `:lang()` gate near the top of `theme-ael.scss` turns off uppercase headings, and it needs the new tag if uppercase does not suit the script.
+
+No image or `docker-images.yml` change is needed: a translation runs the same R code as the English chapter. Run `checks/check-sync.sh` afterwards. Check 9 reports a missing folder, project file, chapter or alias.
+
+### Debugging a failed render
+
+Start by identifying three things: which job failed, which language, and which
+chapter.
+
+**A render that exits 0 is not proof the chapter is correct.** A chapter can render
+successfully and still be wrong — stale output, a broken cross-reference, a
+computed value that silently changed. The build validates its own output as a
+separate step; check what that validation reports, not just whether the render
+job's exit code was 0.
+
+<!-- ======================================================= -->
+## Acknowledgements   
+
+This handbook is produced by a collaboration of epidemiologists from around the world drawing upon experience with organizations including local, state, provincial, and national health agencies, the World Health Organization (WHO), Médecins Sans Frontières / Doctors without Borders (MSF), hospital systems, and academic institutions.
+
+This handbook is **not** an approved product of any specific organization. Although we strive for accuracy, we provide no guarantee of the content in this book.  
+
+
+
+### Contributors  
+
+**Editor:** [Neale Batra](https://www.linkedin.com/in/neale-batra/) 
+
+**Project core team:** [Neale Batra](https://www.linkedin.com/in/neale-batra/), [Alex Spina](https://github.com/aspina7), [Amrish Baidjoe](https://twitter.com/Ammer_B), Pat Keating, [Henry Laurenson-Schafer](https://github.com/henryls1), [Finlay Campbell](https://github.com/finlaycampbell)  
+
+**Authors**: [Neale Batra](https://www.linkedin.com/in/neale-batra/), [Alex Spina](https://github.com/aspina7), [Paula Blomquist](https://www.linkedin.com/in/paula-bianca-blomquist-53188186/), [Finlay Campbell](https://github.com/finlaycampbell), [Henry Laurenson-Schafer](https://github.com/henryls1), [Isaac Florence](www.Twitter.com/isaacatflorence), [Natalie Fischer](www.linkedin.com/in/nataliefischer211), [Aminata Ndiaye](https://twitter.com/aminata_fadl), [Liza Coyer]( https://www.linkedin.com/in/liza-coyer-86022040/), [Jonathan Polonsky](https://twitter.com/jonny_polonsky), [Yurie Izawa](https://ch.linkedin.com/in/yurie-izawa-a1590319), [Chris Bailey](https://twitter.com/cbailey_58?lang=en), [Daniel Molling](https://www.linkedin.com/in/daniel-molling-4005716a/), [Isha Berry](https://twitter.com/ishaberry2), [Emma Buajitti](https://twitter.com/buajitti), [Mathilde Mousset](https://mathildemousset.wordpress.com/research/), [Sara Hollis](https://www.linkedin.com/in/saramhollis/), Wen Lin  
+
+**Reviewers**: Pat Keating, Annick Lenglet, Margot Charette, Daniely Xavier, Esther Kukielka, Michelle Sloan, Aybüke Koyuncu, Rachel Burke, Kate Kelsey, [Berhe Etsay](https://www.linkedin.com/in/berhe-etsay-5752b1154/), John Rossow, Mackenzie Zendt, James Wright, Laura Haskins, [Flavio Finger](ffinger.github.io), Tim Taylor, [Jae Hyoung Tim Lee](https://www.linkedin.com/in/jaehyoungtlee/), [Brianna Bradley](https://www.linkedin.com/in/brianna-bradley-bb8658155), [Wayne Enanoria](https://www.linkedin.com/in/wenanoria), Manual Albela Miranda, [Molly Mantus](https://www.linkedin.com/in/molly-mantus-174550150/), Pattama Ulrich, Joseph Timothy, Adam Vaughan, Olivia Varsaneux, Lionel Monteiro, Joao Muianga  
+
+**Illustrations**: Calder Fong  
+
+
+<!-- **Editor-in-Chief:** Neale Batra  -->
+
+<!-- **Project core team:** Neale Batra, Alex Spina, Amrish Baidjoe, Pat Keating, Henry Laurenson-Schafer, Finlay Campbell   -->
+
+<!-- **Authors**: Neale Batra, Alex Spina, Paula Blomquist, Finlay Campbell, Henry Laurenson-Schafer, [Isaac Florence](www.Twitter.com/isaacatflorence), Natalie Fischer, Aminata Ndiaye, Liza Coyer, Jonathan Polonsky, Yurie Izawa, Chris Bailey, Daniel Molling, Isha Berry, Emma Buajitti, Mathilde Mousset, Sara Hollis, Wen Lin   -->
+
+<!-- **Reviewers**: Pat Keating, Mathilde Mousset, Annick Lenglet, Margot Charette, Isha Berry, Paula Blomquist, Natalie Fischer, Daniely Xavier, Esther Kukielka, Michelle Sloan, Aybüke Koyuncu, Rachel Burke, Daniel Molling, Kate Kelsey, Berhe Etsay, John Rossow, Mackenzie Zendt, James Wright, Wayne Enanoria, Laura Haskins, Flavio Finger, Tim Taylor, Jae Hyoung Tim Lee, Brianna Bradley, Manual Albela Miranda, Molly Mantus, Priscilla Spencer, Pattama Ulrich, Joseph Timothy, Adam Vaughan, Olivia Varsaneux, Lionel Monteiro, Joao Muianga   -->
+
+
+### Funding and support   
+
+
+The handbook received supportive funding via a COVID-19 emergency capacity-building grant from [TEPHINET](https://www.tephinet.org/), the global network of Field Epidemiology Training Programs (FETPs).  
+
+Administrative support was provided by the EPIET Alumni Network ([EAN](https://epietalumni.net/)), with special thanks to Annika Wendland. EPIET is the European Programme for Intervention Epidemiology Training.  
+
+Special thanks to Médecins Sans Frontières (MSF) Operational Centre Amsterdam (OCA) for their support during the development of this handbook.  
+
+
+*This publication was supported by Cooperative Agreement number NU2GGH001873, funded by the Centers for Disease Control and Prevention through TEPHINET, a program of The Task Force for Global Health. Its contents are solely the responsibility of the authors and do not necessarily represent the official views of the Centers for Disease Control and Prevention, the Department of Health and Human Services, The Task Force for Global Health, Inc. or TEPHINET.*
+
+### Inspiration   
+
+The multitude of tutorials and vignettes that provided knowledge for development of handbook content are credited within their respective pages.  
+
+More generally, the following sources provided inspiration for this handbook:  
+[The "R4Epis" project](https://r4epis.netlify.app/) (a collaboration between MSF and RECON)  
+[R Epidemics Consortium (RECON)](https://www.repidemicsconsortium.org/)  
+[R for Data Science book (R4DS)](https://r4ds.had.co.nz/)  
+[bookdown: Authoring Books and Technical Documents with R Markdown](https://bookdown.org/yihui/bookdown/)  
+[Netlify](https://www.netlify.com) hosts this website  
+
+
+<!-- ### Image credits {-}   -->
+
+<!-- Images in logo from US CDC Public Health Image Library) include [2013 Yemen looking for mosquito breeding sites](https://phil.cdc.gov/Details.aspx?pid=19623), [Ebola virus](https://phil.cdc.gov/Details.aspx?pid=23186), and [Survey in Rajasthan](https://phil.cdc.gov/Details.aspx?pid=19838).   -->
+
+
+## Terms of Use and License   
+
+<a rel="license" href="http://creativecommons.org/licenses/by-nc-sa/4.0/"><img alt="Creative Commons License" style="border-width:0" src="https://i.creativecommons.org/l/by-nc-sa/4.0/88x31.png" /></a><br />This work is licensed under a <a rel="license" href="http://creativecommons.org/licenses/by-nc-sa/4.0/">Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International License</a>.
+
+
+Academic courses and epidemiologist training programs are welcome to use this handbook with their students. If you have questions about your intended use, email **epirhandbook@gmail.com**.  
+
+
+## Citation  
+
+Batra, Neale et al. (2021), The Epidemiologist R Handbook. <a rel="license" href="https://zenodo.org/badge/231610102.svg"><img alt="DOI" style="border-width:0" src="https://zenodo.org/badge/231610102.svg" /></a><br />
+
+
+
+## Contribution
+
+If you would like to make a content contribution, please contact with us first via Github issues or by email. We are implementing a schedule for updates and are creating a contributor guide.  
+
+Please note that the epiRhandbook project is released with a [Contributor Code of Conduct](https://contributor-covenant.org/version/2/0/CODE_OF_CONDUCT.html). By contributing to this project, you agree to abide by its terms.
+

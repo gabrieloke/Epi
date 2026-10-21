@@ -1,0 +1,14 @@
+---
+toc: false
+aliases:
+  - /index.es.html
+---
+
+# Bienvenida {-}
+
+<meta name="description" content="EpiRhandbook es un manual de referencia de R aplicado a la epidemiología y la salud pública. ">
+
+```{r, echo=FALSE, results='asis'}
+source(here::here("utils", "landing-hero.R"))
+cat(landing_hero(basename(getwd())))
+```

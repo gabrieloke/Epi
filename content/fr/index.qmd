@@ -1,0 +1,14 @@
+---
+toc: false
+aliases:
+  - /index.fr.html
+---
+
+# Bienvenue {-}
+
+<meta name="description" content="The Epi R Handbook est un manuel de référence sur l'utilisation de R en épidémiologie appliquée et santé publique.">
+
+```{r, echo=FALSE, results='asis'}
+source(here::here("utils", "landing-hero.R"))
+cat(landing_hero(basename(getwd())))
+```

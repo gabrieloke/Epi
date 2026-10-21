@@ -1,0 +1,117 @@
+name: Translation sync check
+# Fails when a translated chapter drifts from the English in structure:
+# a missing chapter, a different code-chunk count, a different heading sequence,
+# a heading without the English anchor id, a chunk whose code differs, a dead
+# internal link, an unterminated link, or a chunk that reads the data/ folder.
+# It also runs the two gates that need a base commit, over the files changed since that
+# commit: check 6, quarto render --no-execute on every changed translated chapter, and
+# check 8, the R parse gate on every chunk of those chapters.
+# Read-only. Needs python3, git, quarto and R. What each check means and how to repair
+# drift: checks/README.md.
+#
+# staging.yml and preview.yml call this workflow on the commit they build, and their
+# build-deploy job needs it. So a commit that fails here is never deployed. A called
+# workflow sees the event of its caller, so the base commit below still comes from the
+# push or the pull_request event.
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: "The commit to check. The caller passes the commit it builds."
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      base:
+        description: "Commit to diff against for checks 6 and 8. Empty means the root commit (whole tree)."
+        required: false
+        default: ""
+jobs:
+  check-sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        # Major tag, never a SHA. See the note at the top of build-deploy.yml.
+        uses: actions/checkout@v4
+        with:
+          # The caller's commit. Empty under workflow_dispatch, which checks out the
+          # commit of the dispatch.
+          ref: ${{ inputs.ref }}
+          # Checks 6 and 8 read the diff against a base commit, so they need the history.
+          fetch-depth: 0
+      - name: Install pandoc
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq pandoc
+      - name: Install R with knitr and rmarkdown
+        # Check 8 parses every chunk with R; r-base-core carries parse(). Check 6 renders with
+        # quarto --no-execute, and quarto's knitr engine still loads rmarkdown and knitr before
+        # it decides not to execute, so both packages must be installed. Proved on 2026-09-09:
+        # with r-base-core alone every render failed with "no package called 'rmarkdown'".
+        run: sudo apt-get install -y -qq r-base-core r-cran-knitr r-cran-rmarkdown
+      - name: Install PyYAML
+        # Checks 1 to 9 and check 15 read languages.yml through checks/langs.py, which imports
+        # PyYAML. Check 12 runs those scripts, so it needs PyYAML too. Check 15 also reads
+        # landing.yml with a yaml.SafeLoader subclass. It carried a hand-written reader
+        # until 2026-09-18, and that reader could not separate the string
+        # "3" from the number 3. Its malformed-value rule could therefore never fire here,
+        # which is worse than a dependency. python3-yaml puts the module at
+        # /usr/lib/python3/dist-packages/yaml/, on the system python3 path.
+        run: sudo apt-get install -y -qq python3-yaml
+      - name: Install Quarto
+        # Check 6 renders with quarto. 1.9.38 is the version the book's build image carries
+        # (rbase/4.6.0/Dockerfile in appliedepi/aedockerpublic).
+        uses: quarto-dev/quarto-actions/setup@v2
+        with:
+          version: 1.9.38
+      - name: Work out the base commit
+        id: base
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          DISPATCH_BASE: ${{ github.event.inputs.base }}
+        run: |
+          set -uo pipefail
+          root=$(git rev-list --max-parents=0 HEAD | tail -1)
+          zero=0000000000000000000000000000000000000000
+          usable() {
+            [ -n "${1:-}" ] && [ "$1" != "$zero" ] \
+              && git cat-file -e "$1^{commit}" 2>/dev/null \
+              && git merge-base --is-ancestor "$1" HEAD
+          }
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            # A manual run names its own base, or gets the whole tree.
+            if usable "${DISPATCH_BASE:-}"; then
+              base="$DISPATCH_BASE"; why="the base given to workflow_dispatch"
+            else
+              base="$root"; why="the root commit, because workflow_dispatch gave no usable base"
+            fi
+          elif [ "$EVENT" = "pull_request" ]; then
+            # On a pull request origin/main is the target branch, not this head, so merge-base
+            # gives the fork point. That is the right fallback here and only here.
+            # preview.yml passes the PR head, not the merge commit. When main moved after the
+            # fork, PR_BASE is not an ancestor of that head, and merge-base gives the base.
+            if usable "${PR_BASE:-}"; then
+              base="$PR_BASE"; why="the pull_request event's base commit"
+            elif git fetch --no-tags --quiet origin +refs/heads/main:refs/remotes/origin/main \
+                 && mb=$(git merge-base origin/main HEAD 2>/dev/null) && [ -n "$mb" ]; then
+              base="$mb"; why="git merge-base origin/main HEAD"
+            else
+              base="$root"; why="the root commit"
+            fi
+          else
+            # On a push to main origin/main is this same commit, so merge-base returns HEAD and
+            # checks 6 and 8 would see an empty changed set. Fall back to the whole tree instead.
+            if usable "${PUSH_BEFORE:-}"; then
+              base="$PUSH_BEFORE"; why="the push event's before commit"
+            else
+              base="$root"; why="the root commit, because the push event carried no usable before commit"
+            fi
+          fi
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          echo "checks 6 and 8 run against $base ($why)"
+      - name: Check the translations against the English
+        env:
+          BASE: ${{ steps.base.outputs.base }}
+        run: checks/check-sync.sh --base "$BASE"

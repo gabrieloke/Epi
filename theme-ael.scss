@@ -1,0 +1,779 @@
+/*-- scss:rules --*/
+/* =====================================================================
+   Applied Epi Handbook: the "Applied Epi, pushed" (.ael) redesign
+   SHARED structural rules. Colours/fonts come from the token layers
+   (theme-light.scss / theme-dark.scss) via CSS custom properties.
+   ===================================================================== */
+
+/* ---- structural tokens ---------------------------------------------- */
+:root {
+  /* Uppercase with positive tracking is a Latin device. On Japanese it is worse
+     than useless: text-transform does nothing to kana or kanji, while the tracking
+     still fires and loosens the line. Cyrillic and Vietnamese read badly under it
+     too. Eight rules below pair the two, and each reads these two tokens instead of
+     writing the values directly.
+     The gate reads the BCP-47 tag in <html lang>, which is the tag languages.yml
+     declares: Japanese is ja and Vietnamese is vi. The folder and the site path keep
+     the older jp and vn spelling, and :lang() never reads a path. Both books emitted
+     the folder spelling until 2026-09-18, so this gate listed it too. */
+  --ael-caps: uppercase;
+  --ael-track: 1;
+
+  /* Bootstrap Icons glyphs, drawn as masks in currentColor so they follow the theme.
+     Quarto scopes its own toggle glyph to the sidebar header, which this theme hides. */
+  --ael-icon-toggle-off: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M11 4a4 4 0 0 1 0 8H8a4.992 4.992 0 0 0 2-4 4.992 4.992 0 0 0-2-4h3zm-6 8a4 4 0 1 1 0-8 4 4 0 0 1 0 8zM0 8a5 5 0 0 0 5 5h6a5 5 0 0 0 0-10H5a5 5 0 0 0-5 5z'/%3E%3C/svg%3E");
+  --ael-icon-toggle-on: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M5 3a5 5 0 0 0 0 10h6a5 5 0 0 0 0-10H5zm6 9a4 4 0 1 1 0-8 4 4 0 0 1 0 8z'/%3E%3C/svg%3E");
+  --ael-icon-copy: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 1.5H3a2 2 0 0 0-2 2V14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V3.5a2 2 0 0 0-2-2h-1v1h1a1 1 0 0 1 1 1V14a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V3.5a1 1 0 0 1 1-1h1v-1z'/%3E%3Cpath d='M9.5 1a.5.5 0 0 1 .5.5v1a.5.5 0 0 1-.5.5h-3a.5.5 0 0 1-.5-.5v-1a.5.5 0 0 1 .5-.5h3zm-3-1A1.5 1.5 0 0 0 5 1.5v1A1.5 1.5 0 0 0 6.5 4h3A1.5 1.5 0 0 0 11 2.5v-1A1.5 1.5 0 0 0 9.5 0h-3z'/%3E%3C/svg%3E");
+  --ael-icon-check: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M13.854 3.646a.5.5 0 0 1 0 .708l-7 7a.5.5 0 0 1-.708 0l-3.5-3.5a.5.5 0 1 1 .708-.708L6.5 10.293l6.646-6.647a.5.5 0 0 1 .708 0z'/%3E%3C/svg%3E");
+}
+:root:lang(ja),
+:root:lang(vi),
+:root:lang(ru) {
+  --ael-caps: none;
+  --ael-track: 0;
+}
+
+/* ---- base typography ------------------------------------------------ */
+body {
+  font-family: var(--font);
+  color: var(--fg);
+  background: var(--bg);
+  font-size: 15.5px;
+  line-height: 1.75;
+}
+h1, h2, h3, h4, h5, .quarto-title h1.title {
+  font-family: var(--serif);
+  font-weight: 600;
+  letter-spacing: -.01em;
+  color: var(--fg);
+}
+a { color: var(--brand); text-underline-offset: 2px; }
+a:hover { color: var(--brand); }
+
+#quarto-document-content p { font-size: 15.5px; line-height: 1.75; color: var(--fg); }
+/* A long bare URL in prose breaks rather than pushing the page wider than a phone
+   screen. A wide display equation scrolls inside its own box. */
+#quarto-document-content { overflow-wrap: break-word; }
+#quarto-document-content mjx-container[display="true"] { max-width: 100%; overflow-x: auto; overflow-y: hidden; }
+
+/* JetBrains Mono draws <- as an arrow and %>% and != as single glyphs. A reader
+   types what the page shows, so code shows the characters. */
+code, pre, kbd, samp { font-variant-ligatures: none; font-feature-settings: "liga" 0, "calt" 0; }
+
+/* inline code. It wraps, because a long call in a list item otherwise pushes the
+   page wider than a phone screen. */
+p code:not(.sourceCode), li code:not(.sourceCode), td code:not(.sourceCode),
+.callout code:not(.sourceCode) {
+  font-family: var(--mono);
+  font-size: .86em;
+  background: var(--panel);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  padding: 1px 6px;
+  border-radius: 5px;
+  white-space: break-spaces;
+  overflow-wrap: anywhere;
+}
+#quarto-document-content img { max-width: 100%; height: auto; }
+
+/* =====================================================================
+   Top app bar (built + populated by ael-extras.html on every page)
+   ===================================================================== */
+.ael-appbar {
+  position: sticky;
+  top: 0;
+  z-index: 1050;
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  height: 60px;
+  padding: 0 22px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
+}
+.ael-brand { display: flex; align-items: center; gap: 11px; text-decoration: none; }
+.ael-brand img { width: 34px; height: 34px; display: block; }
+.ael-brand-t { display: block; font-family: var(--serif); font-weight: 600; font-size: 16px; color: var(--fg); line-height: 1.1; white-space: nowrap; }
+.ael-brand-s { display: block; font-family: var(--mono); font-size: 11px; color: var(--muted); margin-top: 1px; }
+.ael-appbar-search { margin-left: auto; }
+.ael-appbar-tools { display: flex; align-items: center; gap: 16px; }
+.ael-appbar-tools .ael-darklbl { font-family: var(--mono); font-size: 11px; letter-spacing: calc(var(--ael-track) * .08em); text-transform: var(--ael-caps); color: var(--muted); cursor: pointer; }
+.ael-appbar-tools .ael-darklbl:hover { color: var(--brand); }
+/* Quarto search + colour-scheme toggle, relocated into the bar */
+.ael-appbar #quarto-search { min-width: 230px; }
+.ael-appbar #quarto-search .aa-Autocomplete,
+.ael-appbar #quarto-search .aa-Form { background: var(--panel); border-color: var(--line); border-radius: var(--radius); }
+.ael-appbar #quarto-search .aa-InputWrapperPrefix { padding-left: 6px; }
+.ael-appbar #quarto-search .aa-SubmitIcon { color: var(--muted); }
+.ael-appbar .quarto-color-scheme-toggle { display: inline-flex; align-items: center; color: var(--muted); }
+.ael-appbar .quarto-color-scheme-toggle:hover { color: var(--brand); }
+.ael-appbar .quarto-color-scheme-toggle .bi::before {
+  content: "";
+  display: inline-block;
+  width: 20px;
+  height: 20px;
+  background: currentColor !important;
+  -webkit-mask: var(--ael-icon-toggle-off) center / contain no-repeat;
+  mask: var(--ael-icon-toggle-off) center / contain no-repeat;
+}
+.ael-appbar .quarto-color-scheme-toggle.alternate .bi::before {
+  -webkit-mask-image: var(--ael-icon-toggle-on);
+  mask-image: var(--ael-icon-toggle-on);
+}
+/* Under Quarto's sidebar breakpoint its own top bar returns, with the book-index
+   button, the breadcrumb and a search button. The app bar keeps the brand and the
+   toggle, so the two bars fit a phone screen side by side with nothing repeated. */
+@media (max-width: 991.98px) {
+  .ael-appbar { gap: 12px; padding: 0 16px; }
+  .ael-appbar-search, .ael-appbar-tools .ael-darklbl { display: none; }
+  .ael-appbar-tools { margin-left: auto; }
+  .quarto-secondary-nav .quarto-page-breadcrumbs { min-width: 0; overflow: hidden; }
+  .quarto-secondary-nav .breadcrumb,
+  .quarto-secondary-nav .breadcrumb-item { min-width: 0; flex-wrap: nowrap; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+}
+
+/* ---- language switcher, relocated into the app bar ------------------ */
+/* inject_language_links.R writes #languages-links-parent into the sidebar header
+   AFTER the render, over the assembled site. .sidebar-header is display:none here,
+   so the switcher must move into the app bar or no reader ever sees it.
+   ael-extras.html does the move, and guards on null: a local single-language
+   render has no switcher at all.
+   The app bar is also the only place it can open. #quarto-sidebar carries
+   max-height + overflow-y:auto (see the sticky-offset block below), which clips an
+   absolutely positioned .dropdown-menu. .ael-appbar-tools has no overflow rule. */
+.ael-appbar-tools .dropdown { position: relative; }
+.ael-appbar-tools #languages-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 11px;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1;
+  background: var(--brand);
+  border: 1px solid var(--brand);
+  color: var(--on-brand, #fff);
+  border-radius: var(--radius);
+}
+.ael-appbar-tools #languages-button:hover,
+.ael-appbar-tools #languages-button:focus {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: var(--on-brand, #fff);
+}
+.ael-appbar-tools .dropdown-menu {
+  min-width: 190px;
+  margin-top: 6px;
+  padding: 6px;
+  list-style: none;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .18);
+}
+/* The injected list holds bare <a class="dropdown-item"> children, not <li>, so the
+   item rules must match the anchor itself. */
+.ael-appbar-tools .dropdown-menu .dropdown-item {
+  display: block;
+  padding: 7px 10px;
+  border-radius: 6px;
+  font-family: var(--font);
+  font-size: 13.5px;
+  color: var(--fg);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.ael-appbar-tools .dropdown-menu .dropdown-item:hover,
+.ael-appbar-tools .dropdown-menu .dropdown-item:focus {
+  background: var(--brandsoft);
+  color: var(--brand);
+}
+/* hide the sidebar's own brand/search/tools block. It now lives in the app bar */
+.sidebar-navigation .sidebar-header { display: none !important; }
+/* the search moved to the app bar; drop the empty search row it left in the sidebar
+   (so the first nav item aligns with the right-hand TOC) */
+#quarto-sidebar .sidebar-search,
+#quarto-sidebar .mt-2.flex-shrink-0.align-items-center { display: none !important; }
+/* the nav list carries an extra top padding the right TOC does not. Drop it so the
+   first sidebar item lines up with the "On this page" heading */
+#quarto-sidebar .sidebar-menu-container { padding-top: 0 !important; }
+
+/* ---- sticky offsets: the sticky app bar must never cover the columns / anchors --- */
+:root { --ael-appbar-h: 60px; }
+#quarto-sidebar.sidebar-navigation,
+#quarto-margin-sidebar {
+  top: var(--ael-appbar-h) !important;          /* stick just below the app bar */
+  align-self: start !important;                 /* don't stretch to the tall grid row */
+  height: auto !important;
+  /* --ael-sidebar-maxh is computed live in ael-extras.html as
+     min(space-below-appbar-minus-footer, article-height): the second term stops the
+     tall nav from overhanging a short page (Welcome) and leaving dead space, the
+     first keeps it within the viewport on long chapters. Fallback = viewport space. */
+  max-height: var(--ael-sidebar-maxh, calc(100vh - var(--ael-appbar-h) - var(--ael-footer-h, 60px))) !important;
+  overflow-y: auto;                             /* long nav scrolls internally */
+}
+/* Reclaim the wasted left screen gutter: extend the book nav all the way to the
+   screen edge so its item text sits just inside the edge (aligned with the app-bar
+   brand) instead of ~76px in. The divider (right edge at body-start) is untouched,
+   so it stays flush against the hero/content. */
+#quarto-sidebar.sidebar-navigation {
+  grid-column: screen-start / body-start !important;
+  padding-left: 22px !important;
+}
+#quarto-sidebar.sidebar-navigation .sidebar-link { padding-left: 8px !important; }
+/* trim the nav's bottom padding so there's no white gap under the last item when
+   the whole nav fits (short nav / tall window) */
+#quarto-sidebar.sidebar-navigation .sidebar-menu-container { padding-bottom: 2px !important; }
+#quarto-sidebar.sidebar-navigation .sidebar-item:last-child { margin-bottom: 0 !important; }
+/* clicking a TOC link lands the heading below the app bar, not under it */
+#quarto-document-content h1,
+#quarto-document-content h2,
+#quarto-document-content h3,
+#quarto-document-content h4,
+#quarto-document-content h5,
+#quarto-document-content section[id],
+#quarto-document-content div[id] {
+  scroll-margin-top: calc(var(--ael-appbar-h) + 18px);
+}
+
+/* ---- sidebar: book-index spine ------------------------------------- */
+.sidebar-navigation {
+  position: relative;
+  background: var(--bg) !important;
+  border-right: 1px solid var(--line);
+  font-size: 13.5px;
+  padding-left: 20px;
+}
+.sidebar-navigation .sidebar-menu-container { position: relative; }
+
+/* section (part) labels: mono, brand, hairline above */
+.sidebar-item.sidebar-item-section > .sidebar-item-container > .sidebar-link,
+.sidebar-item.sidebar-item-section > .sidebar-item-container > .sidebar-item-text {
+  font-family: var(--mono);
+  font-weight: 700;
+  font-size: 10.5px;
+  letter-spacing: calc(var(--ael-track) * .11em);
+  text-transform: var(--ael-caps);
+  color: var(--brand) !important;
+  margin-top: 3px;
+  padding-top: 13px;
+  border-top: none;
+  border-radius: 0;
+  position: relative;
+}
+/* short, inset divider hairline that does NOT reach/cross the spine */
+.sidebar-item.sidebar-item-section > .sidebar-item-container > .sidebar-link::before {
+  content: "";
+  position: absolute;
+  left: 12px;
+  right: 8px;
+  top: 0;
+  height: 1px;
+  background: var(--line);
+}
+.sidebar-item.sidebar-item-section:first-of-type > .sidebar-item-container > .sidebar-link::before { display: none; }
+.sidebar-item.sidebar-item-section > .sidebar-item-container > .sidebar-link:hover {
+  background: transparent;   /* section labels aren't clickable pills */
+}
+
+/* subtle, thin sidebar scrollbar instead of the heavy default */
+.sidebar-navigation { scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+.sidebar-navigation::-webkit-scrollbar { width: 6px; }
+.sidebar-navigation::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
+.sidebar-navigation::-webkit-scrollbar-track { background: transparent; }
+
+
+/* flat book-index look: no accordion chevrons/borders */
+.sidebar-navigation .sidebar-item-toggle { display: none !important; }
+.sidebar-navigation .sidebar-item-section > .sidebar-item-container { border: none; }
+
+/* nav items */
+.sidebar-item .sidebar-link {
+  position: relative;
+  color: var(--fg);
+  border-radius: 6px;
+  padding: 7px 12px;
+}
+/* numbered items: hang-indent wrapped lines to align with the title, not the number */
+.sidebar-item .sidebar-link.ael-numbered .menu-text { display: flex; align-items: baseline; gap: 8px; }
+.sidebar-item .sidebar-link.ael-numbered .ael-navnum { flex: none; }
+.sidebar-item .sidebar-link.ael-numbered .ael-navtext { flex: 1; min-width: 0; }
+.sidebar-item .sidebar-link:hover { background: var(--brandsoft); color: var(--brand); }
+.sidebar-navigation .sidebar-link.active {
+  background: var(--brandsoft);
+  color: var(--brand) !important;
+  font-weight: 700;
+}
+/* square tick on the spine for the active item */
+.sidebar-navigation .sidebar-link.active::before {
+  content: "";
+  position: absolute;
+  left: -16px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 9px;
+  height: 9px;
+  background: var(--brand);
+}
+
+/* ---- sidebar header / brand lockup --------------------------------- */
+.sidebar-title { font-family: var(--serif); font-weight: 600; font-size: 18px; color: var(--fg); }
+.sidebar-search .aa-Input, .sidebar-search input {
+  font-family: var(--font);
+}
+.sidebar-search .aa-DetachedSearchButton, #quarto-search .aa-DetachedSearchButton {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--muted);
+}
+
+/* ---- title block / chapter masthead -------------------------------- */
+/* The chapter number sits on its own line above the title. Number, title and lede
+   share one left edge with the body text, whatever the number of digits and
+   whatever the script. The lede paragraph is relocated into .quarto-title by
+   ael-extras.html. */
+#title-block-header.quarto-title-block { margin-bottom: 28px; }
+/* No part kicker above the title. The sidebar already names the part, right above
+   the active chapter, and under the sidebar breakpoint Quarto's top bar carries the
+   full breadcrumb. Bootstrap's d-lg-block sets display with !important. */
+#title-block-header .quarto-title-breadcrumbs { display: none !important; }
+
+.quarto-title h1.title { font-size: 33px; line-height: 1.12; margin: 0 0 6px; }
+/* Quarto writes "&nbsp; " between the number and the title. With the number on its
+   own line, that space would start the title's line and indent it. The number is a
+   child of the h1, or of a .quarto-section-identifier span when the heading carries an
+   {#id}, so the match is on any descendant. */
+.quarto-title h1.title:has(.chapter-number) { font-size: 0; }
+.quarto-title h1.title .chapter-number {
+  display: block;
+  margin: 0 0 8px;
+  font-family: var(--mono);
+  font-weight: 700;
+  font-size: 42px;
+  line-height: 1;
+  color: var(--brand);
+}
+.quarto-title h1.title .chapter-title { font-family: var(--serif); font-size: 33px; }
+.quarto-title .ael-lede {
+  font-size: 17px;
+  line-height: 1.6;
+  color: var(--muted);
+  margin: 8px 0 0;
+}
+
+/* ---- section headings + numbers ------------------------------------ */
+/* Every block in a section starts at one left edge. The h2 section number sits on
+   its own line above the h2 text, as the chapter number does above the title. */
+#quarto-document-content section { padding-left: 0; }
+#quarto-document-content > p,
+#quarto-document-content > ul,
+#quarto-document-content > ol,
+#quarto-document-content > div.sourceCode,
+#quarto-document-content > .cell,
+#quarto-document-content > .callout,
+#quarto-document-content > blockquote { margin-left: 0; }
+
+/* line ABOVE each h2 (section separator); never under the title */
+#quarto-document-content h2 {
+  font-size: 25px;
+  line-height: 1.2;
+  margin-top: 44px;
+  padding-top: 24px;
+  border-top: 1px solid var(--line);
+  border-bottom: none !important;
+}
+#quarto-document-content h3 { font-size: 19px; margin-top: 28px; border-bottom: none !important; }
+#quarto-document-content h2 .header-section-number {
+  display: block;
+  margin: 0 0 6px;
+  font-family: var(--mono);
+  font-weight: 700;
+  font-size: 13px;
+  line-height: 1.2;
+  color: var(--brand2);
+}
+
+/* ---- callouts: borderless, left-rule ------------------------------- */
+.callout {
+  background: transparent !important;
+  border: none !important;
+  border-left: 4px solid var(--brand) !important;
+  border-radius: 0 !important;
+  padding: 2px 0 2px 20px !important;
+  margin: 22px 0;
+}
+.callout.callout-style-default > .callout-header { background: transparent !important; padding: 0; }
+.callout .callout-icon-container, .callout .callout-btn-toggle { display: none !important; }
+.callout .callout-title-container { font-weight: 700; color: var(--fg); font-family: var(--font); }
+.callout .callout-body-container, .callout .callout-body {
+  font-size: 14.5px; line-height: 1.62; color: var(--fg); padding: 4px 0 0;
+}
+.callout-note   { border-left-color: var(--brand)  !important; }
+.callout-tip    { border-left-color: var(--brand2) !important; }
+.callout-caution, .callout-warning { border-left-color: #c9820e !important; }
+.callout-important { border-left-color: #c0392b !important; }
+
+/* ---- code blocks: light, readable theme ---------------------------- */
+div.sourceCode, pre.sourceCode {
+  background: var(--codebg) !important;
+  border: 1px solid var(--codeline);
+  border-radius: var(--radius);
+}
+div.sourceCode { margin-top: 18px; margin-bottom: 18px; }   /* left handled by section pull */
+pre.sourceCode { border: none; margin: 0; padding: 15px 17px; }
+pre.sourceCode code, pre code.sourceCode, .sourceCode span {
+  font-family: var(--mono);
+  font-size: 13.5px;
+  line-height: 1.7;
+  color: var(--codefg);
+}
+/* syntax token colours */
+code.sourceCode .co { color: var(--tc); font-style: italic; }
+code.sourceCode .kw, code.sourceCode .cf { color: var(--tk); }
+code.sourceCode .fu { color: var(--tfn); }
+code.sourceCode .st, code.sourceCode .ss { color: var(--ts); }
+code.sourceCode .op, code.sourceCode .sc { color: var(--to); }
+code.sourceCode .dv, code.sourceCode .fl, code.sourceCode .bn { color: var(--tfn); }
+/* copy button. Quarto draws its glyph only while the block is hovered, which left
+   the bordered box empty. The glyph is now always drawn, and the whole button shows
+   with the block on a pointer device, so it never covers the end of a long line. */
+.code-copy-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: var(--codemut);
+  background: var(--codebg);
+  border: 1px solid var(--codeline);
+  border-radius: 7px;
+}
+.code-copy-button:hover { color: var(--brand); border-color: var(--brand); }
+.code-copy-button > .bi::before,
+.code-copy-button:hover > .bi::before,
+div.code-copy-outer-scaffold:hover > .code-copy-button > .bi::before {
+  content: "";
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  vertical-align: 0;
+  background: currentColor !important;
+  -webkit-mask: var(--ael-icon-copy) center / contain no-repeat;
+  mask: var(--ael-icon-copy) center / contain no-repeat;
+}
+.code-copy-button-checked > .bi::before {
+  -webkit-mask-image: var(--ael-icon-check) !important;
+  mask-image: var(--ael-icon-check) !important;
+}
+/* Only on a device with no touch input at all: a touch laptop reports hover too, and its
+   reader could not see a button that only a pointer reveals. */
+@media (hover: hover) and (not (any-pointer: coarse)) {
+  .code-copy-button { opacity: 0; }
+  div.code-copy-outer-scaffold:hover > .code-copy-button,
+  .code-copy-button:focus-visible { opacity: 1; }
+}
+/* code output attached below */
+.cell-output {
+  background: var(--panel);
+  border: 1px solid var(--codeline);
+  border-top: none;
+  border-radius: 0 0 var(--radius) var(--radius);
+  padding: 13px 16px;
+  margin-top: -18px; margin-bottom: 18px;   /* left inherited from the .cell pull */
+  font-family: var(--mono);
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.cell-output pre { background: transparent; border: none; margin: 0; padding: 0; color: var(--muted); }
+
+/* ---- tables -------------------------------------------------------- */
+/* A printed-manual table: 2px fg rules at the top and the foot, the header on a panel
+   band over a 1px fg rule, and line-strong rules between rows, so a row can be
+   followed across a wide gap. A DataTables table gets the header band and the row
+   rules but no outer frame, because DataTables splits a scrolling table into a header
+   table and a body table.
+   A gt table (gtsummary too) is left to gt. gt paints its own white cells, so forcing
+   fg text on them made them unreadable in dark mode, at 1.17:1. It now shows as gt
+   draws it, a white table in both modes, as flextable does. */
+#quarto-document-content table:not(.gt_table), .table:not(.gt_table) {
+  border-collapse: collapse;
+  font-size: 14px;
+}
+#quarto-document-content table:not(.dataTable):not(.gt_table) {
+  border-top: 2px solid var(--fg);
+  border-bottom: 2px solid var(--fg);
+}
+#quarto-document-content table:not(.gt_table) thead th, .table:not(.gt_table) thead th {
+  text-align: left;
+  font-family: var(--mono);
+  font-weight: 700;
+  font-size: 11px;
+  text-transform: var(--ael-caps);
+  letter-spacing: calc(var(--ael-track) * .06em);
+  color: var(--fg);
+  border-bottom: 1px solid var(--fg);
+  background-color: var(--panel);
+  padding: 11px 14px;
+}
+/* A table that R printed has column names for headers. A reader types them, so they
+   keep their case. */
+#quarto-document-content .cell-output-display table:not(.gt_table) thead th,
+#quarto-document-content .dataTables_wrapper thead th {
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 12px;
+}
+#quarto-document-content table:not(.gt_table) tbody td, .table:not(.gt_table) tbody td {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line-strong);
+  color: var(--fg);
+  vertical-align: top;
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+#quarto-document-content table:not(.gt_table) tbody tr:last-child td { border-bottom: none; }
+
+/* A table wider than the column scrolls inside it, so the page never scrolls
+   sideways on a phone. ael-extras.html wraps each table in .ael-tablewrap. The table
+   keeps display: table, so a screen reader still reads it as a table. */
+/* The space after a table is larger than the space before it, so a label or heading
+   that follows reads with the next block, not as a caption of the table above. It was
+   8px after the table and 24px before the next one. */
+.ael-tablewrap { max-width: 100%; overflow-x: auto; margin: 0 0 44px; }
+.ael-tablewrap > table { margin-bottom: 0 !important; }
+/* A table that ends its container (a callout, a tab panel, a section) needs no space
+   after it; the next block brings its own. */
+.ael-tablewrap:last-child { margin-bottom: 0; }
+
+/* ---- tabsets ------------------------------------------------------- */
+.panel-tabset .nav-tabs { border-bottom: 1px solid var(--line); gap: 4px; }
+.panel-tabset .nav-tabs .nav-link {
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 13.5px;
+  font-family: var(--font);
+  background: transparent;
+}
+.panel-tabset .nav-tabs .nav-link.active {
+  color: var(--brand);
+  border-bottom-color: var(--brand);
+  background: transparent;
+}
+
+/* ---- blockquote ---------------------------------------------------- */
+#quarto-document-content blockquote, .bq {
+  border-left: 3px solid var(--line);
+  padding: 2px 0 2px 20px;
+  margin: 22px 0;
+  color: var(--muted);
+}
+#quarto-document-content blockquote p { font-size: 16px; line-height: 1.7; color: var(--muted); }
+
+/* ---- right "On this page" TOC -------------------------------------- */
+#quarto-margin-sidebar #toc-title, #TOC #toc-title, .sidebar #toc-title {
+  font-family: var(--mono);
+  font-size: 11px;
+  text-transform: var(--ael-caps);
+  letter-spacing: calc(var(--ael-track) * .09em);
+  color: var(--muted);
+  font-weight: 700;
+}
+#TOC .nav-link, #quarto-margin-sidebar nav a {
+  color: var(--muted);
+  border-left: 2px solid var(--line);
+  padding: 6px 0 6px 14px;
+  font-size: 12.5px;
+}
+#TOC .nav-link.active, #TOC .active > .nav-link {
+  color: var(--brand);
+  border-left-color: var(--brand);
+  font-weight: 700;
+}
+#TOC .nav-link:hover { color: var(--brand); }
+
+/* the injected "Need help with R?" box (see ael-extras.html) */
+.ael-navhelp {
+  margin: 28px 0 4px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--brandsoft);
+}
+.ael-navhelp-t { font-weight: 700; font-size: 13px; color: var(--fg); margin: 0 0 4px; font-family: var(--font); }
+.ael-navhelp-p { font-size: 12px; color: var(--muted); line-height: 1.5; margin: 0 0 11px; }
+.ael-navhelp a { display: block; font-size: 12.5px; font-weight: 600; color: var(--brand); text-decoration: none; margin-bottom: 7px; font-family: var(--font); }
+.ael-navhelp a:hover { text-decoration: underline; }
+
+/* ---- page navigation (pager) --------------------------------------- */
+.page-navigation .nav-page {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 15px 18px;
+}
+.page-navigation .nav-page:hover { border-color: var(--brand); }
+.page-navigation .nav-page a { color: var(--brand); font-weight: 700; text-decoration: none; }
+.nav-page .nav-page-text { font-weight: 700; }
+
+/* ---- footer -------------------------------------------------------- */
+/* breathing room between the last chapter content (the prev/next pager) and the
+   footer, so chapters don't end abruptly against the footer band */
+.page-navigation { margin-bottom: 56px; }
+
+.nav-footer {
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 13px;
+  padding: 30px 40px !important;
+  align-items: center;
+}
+.nav-footer a { color: var(--brand); }
+.nav-footer img { height: 66px; width: auto; }
+/* left slot: the citation / doi / licence stacked, small + muted; logo sits right */
+.nav-footer-left { text-align: left; line-height: 1.6; }
+.nav-footer-left, .nav-footer-left a { color: var(--muted); }
+.nav-footer-left a { text-decoration: none; }
+.nav-footer-left a:hover { text-decoration: underline; }
+
+/* buttons (used on the landing hero + bands) */
+.btn-primary, .btn.btn-primary {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: var(--on-brand, #fff);
+  font-weight: 600;
+  border-radius: var(--radius);
+}
+
+/* The block below is the landing-page component layer. utils/landing-hero.R is
+   the one place that emits markup for it. Three rules differ from the draft it
+   came from: the duplicated .ael-hsearch declaration is gone, .nplockup now
+   collapses with grid-template-columns rather than an inert flex-direction, and
+   the four uppercase rules read --ael-caps and --ael-track like the rest of the
+   file. */
+/* =====================================================================
+   Landing page components (index.qmd markup)
+   ===================================================================== */
+.ael-hero {
+  position: relative;
+  overflow: hidden;
+  color: #fff;
+  text-align: center;
+  /* The bottom padding keeps the stats above the gradient's 80% stop. Below it the
+     ground turns pale and white text falls under 4.5:1. */
+  padding: 52px 60px 136px;
+  background: var(--herograd);
+}
+.ael-eyebrow {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  letter-spacing: calc(var(--ael-track) * .16em);
+  text-transform: var(--ael-caps);
+  color: #c2e2f0;
+  margin: 0 0 20px;
+}
+.ael-htitle {
+  font-family: var(--serif);
+  font-weight: 600;
+  font-size: 50px;
+  line-height: 1.0;
+  letter-spacing: -.022em;
+  margin: 0 0 14px;
+  color: #fff;
+  max-width: 20ch;
+  text-wrap: balance;
+  margin-left: auto;
+  margin-right: auto;
+}
+.ael-hsub,
+#quarto-document-content .ael-hero .ael-hsub {
+  font-size: 18px;
+  line-height: 1.55;
+  max-width: 50ch;
+  margin: 0 auto;
+  color: #d6ecf7 !important;
+}
+.ael-hsearch {
+  display: flex; align-items: center; gap: 11px;
+  max-width: 440px; background: #fff; border-radius: 8px;
+  padding: 12px 16px; margin: 24px auto 18px; color: #5a6b7a;
+}
+.ael-hsearch svg { flex: none; color: #5a6b7a; }
+.ael-hsearch input { border: none; background: transparent; outline: none; font-size: 15px; color: #10222f; width: 100%; font-family: var(--font); }
+.ael-hbtns { display: flex; gap: 13px; flex-wrap: wrap; justify-content: center; }
+.ael-hbtns .btn {
+  font-weight: 600; font-size: 14.5px; letter-spacing: .005em;
+  padding: 13px 26px; border-radius: var(--radius); text-decoration: none;
+  display: inline-flex; align-items: center; gap: 8px;
+}
+.ael-hbtns .btn.light { background: #fff; color: var(--brand); }
+.ael-hbtns .btn.out { background: transparent; border: 1px solid rgba(255,255,255,.55); color: #fff; }
+.ael-hstats { display: flex; gap: 40px; flex-wrap: wrap; justify-content: center; margin: 28px 0 4px; }
+.ael-hstat .statnum { font-family: var(--serif); font-size: 32px; font-weight: 600; color: #fff; line-height: 1; }
+.ael-hstat .statlbl { font-family: var(--mono); font-size: 10px; letter-spacing: calc(var(--ael-track) * .08em); text-transform: var(--ael-caps); color: #fff; margin-top: 9px; }
+
+/* nonprofit band */
+.npband { padding: 52px 56px 20px; background: var(--bg); border-bottom: 1px solid var(--line); text-align: center; }
+.npband > * + * { margin-top: 22px; }
+.npband .npfoot { margin-top: 38px; }
+/* trust note — single line, modest spacing */
+.nptrust { font-size: 13px; line-height: 1.55; color: var(--muted); max-width: none; margin: 26px auto; text-align: center; }
+.nptrust b { color: var(--fg); }
+.nplockup { display: grid; grid-template-columns: 116px 1fr; gap: 26px; align-items: center; max-width: 760px; margin: 0 auto; text-align: left; }
+.nplockup img { width: 116px; height: auto; }
+.nplead { line-height: 1.55; max-width: none; margin: 0; }
+.nplead .brandname { color: var(--brand); font-weight: 700; }
+/* the four service columns, the same four the help box beside every chapter links to */
+.svcs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 28px; margin: 20px auto 0; max-width: 1000px; text-align: left; }
+.svc { border: none; border-top: 2px solid var(--brand); padding: 14px 0 0; display: flex; flex-direction: column; }
+.svch { font-family: var(--serif); font-weight: 600; font-size: 15px; color: var(--fg); margin: 0 0 6px; }
+.svcp { margin: 0 0 12px; }
+/* NB: .nplead and .svcp are <p> — beat Quarto's #quarto-document-content p (id specificity) */
+#quarto-document-content .nplead { font-size: 18px; line-height: 1.55; color: var(--fg); }
+#quarto-document-content .svcp { font-size: 12px; line-height: 1.5; color: var(--muted); font-weight: 400; }
+.svclink { font-family: var(--mono); font-size: 12px; font-weight: 600; color: var(--brand); text-decoration: none; margin-top: auto; }
+.svclink:hover { text-decoration: underline; }
+.npfoot { display: flex; flex-direction: column; align-items: center; gap: 16px; }
+.nplinks { font-family: var(--mono); font-size: 12.5px; color: var(--muted); }
+.nplinks a { color: var(--brand); text-decoration: none; }
+.nplinks a:hover { text-decoration: underline; }
+
+/* generic content sections on the landing page */
+.ael-sec { padding: 16px 0; }
+.seckicker { font-family: var(--mono); font-size: 11.5px; text-transform: var(--ael-caps); letter-spacing: calc(var(--ael-track) * .09em); color: var(--brand); margin: 0 0 8px; }
+.sech { font-family: var(--serif); font-weight: 600; font-size: 23px; margin: 0 0 10px; color: var(--fg); }
+.contriblbl { font-family: var(--mono); font-weight: 700; color: var(--fg); font-size: 12px; letter-spacing: calc(var(--ael-track) * .04em); text-transform: var(--ael-caps); margin: 20px 0 6px; }
+.names { font-size: 15px; line-height: 1.75; color: var(--fg); }
+.names a { color: var(--fg); text-decoration: none; }
+.names a:hover { color: var(--brand); text-decoration: underline; }
+.ael-fine { font-size: 12.5px; color: var(--muted); line-height: 1.65; }
+
+/* license / cite / contribute cards */
+.termgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 32px; }
+.termcard { border: none; border-top: 2px solid var(--brand); padding: 15px 0 0; display: flex; flex-direction: column; }
+.termcard .th { font-family: var(--serif); font-weight: 600; font-size: 16px; margin: 0 0 6px; color: var(--fg); }
+.termcard .tp { font-size: 13.5px; line-height: 1.55; color: var(--muted); margin: 0 0 18px; }
+.doi { font-family: var(--mono); font-size: 12px; color: var(--fg); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; margin-top: auto; align-self: flex-start; }
+
+/* landing footer wordmark */
+.ael-lfoot { display: flex; justify-content: space-between; align-items: center; gap: 20px; flex-wrap: wrap; padding: 40px 0 8px; }
+.ael-lfoot img { height: 64px; width: auto; }
+.ael-lfoot .footmeta { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+
+@media (max-width: 900px) {
+  .svcs { grid-template-columns: repeat(2, 1fr); }
+  .termgrid { grid-template-columns: 1fr; }
+  .ael-htitle { font-size: 38px; }
+  .nplockup { grid-template-columns: 1fr; justify-items: center; text-align: center; }
+}
+@media (max-width: 600px) {
+  .svcs { grid-template-columns: 1fr; }
+  .ael-hero { padding: 40px 16px 156px; }
+  .ael-hstats { gap: 22px; flex-wrap: nowrap; }
+  .ael-hstat .statnum { font-size: 26px; }
+}
